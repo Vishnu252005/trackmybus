@@ -117,6 +117,8 @@ const ProfilePage: React.FC = () => {
   const [groqResponse, setGroqResponse] = useState('');
   const [groqLoading, setGroqLoading] = useState(false);
   const [showAIPanel, setShowAIPanel] = useState(true);
+  const [userBookings, setUserBookings] = useState<any[]>([]);
+  const [userBookingsLoading, setUserBookingsLoading] = useState(false);
 
   // Fetch user profile from Firestore
   useEffect(() => {
@@ -335,6 +337,31 @@ const ProfilePage: React.FC = () => {
       setGroqLoading(false);
     }
   }
+
+  // Fetch bookings for current user
+  useEffect(() => {
+    if (!user) return;
+    setUserBookingsLoading(true);
+    // Try to fetch by userId, fallback to email if needed
+    const q = query(collection(db, 'bookings'), where('userId', '==', user.uid));
+    getDocs(q)
+      .then(snap => {
+        let bookings = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // If no bookings found by userId, try by email (for legacy data)
+        if (bookings.length === 0 && user.email) {
+          const q2 = query(collection(db, 'bookings'), where('email', '==', user.email));
+          getDocs(q2).then(snap2 => {
+            bookings = snap2.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setUserBookings(bookings);
+            setUserBookingsLoading(false);
+          });
+        } else {
+          setUserBookings(bookings);
+          setUserBookingsLoading(false);
+        }
+      })
+      .catch(() => setUserBookingsLoading(false));
+  }, [user]);
 
   if (user) {
     if (role === null) {
@@ -785,21 +812,26 @@ const ProfilePage: React.FC = () => {
             <div>
               <h2 className="text-2xl font-bold mb-6 flex items-center gap-2"><Activity className="h-6 w-6 text-blue-500" />My Bookings</h2>
               <div className="grid gap-4">
-                {mockBookings.map(b => (
-                  <div key={b.id} className="bg-gray-100 dark:bg-gray-700 rounded-lg p-4 flex flex-col md:flex-row md:items-center gap-4 shadow">
-                    <div className="flex-1">
-                      <div className="font-semibold text-lg text-gray-900 dark:text-white">{b.route}</div>
-                      <div className="text-gray-600 dark:text-gray-300">Date: {new Date(b.date).toLocaleString()}</div>
-                      <div className="text-gray-600 dark:text-gray-300">Bus: {b.bus} | Seat: {b.seat}</div>
+                {userBookingsLoading ? (
+                  <div className="text-gray-500 dark:text-gray-400">Loading bookings...</div>
+                ) : userBookings.length === 0 ? (
+                  <div className="text-gray-500 dark:text-gray-400">No bookings found.</div>
+                ) : (
+                  userBookings.map(b => (
+                    <div key={b.id} className="bg-gray-100 dark:bg-gray-700 rounded-lg p-4 flex flex-col md:flex-row md:items-center gap-4 shadow">
+                      <div className="flex-1">
+                        <div className="font-semibold text-lg text-gray-900 dark:text-white">{b.route}</div>
+                        <div className="text-gray-600 dark:text-gray-300">Date: {b.date ? (typeof b.date === 'string' ? new Date(b.date).toLocaleString() : (b.date.seconds ? new Date(b.date.seconds * 1000).toLocaleString() : '-')) : '-'}</div>
+                        <div className="text-gray-600 dark:text-gray-300">Bus: {b.busName} | Seat: {b.seat}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${b.status === 'upcoming' ? 'bg-blue-200 text-blue-800' : b.status === 'completed' ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}`}>{b.status ? b.status.charAt(0).toUpperCase() + b.status.slice(1) : '-'}</span>
+                        {b.status === 'upcoming' && <button className="ml-2 px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-xs">Cancel</button>}
+                        {b.status === 'completed' && <button className="ml-2 px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs">View Ticket</button>}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${b.status === 'Upcoming' ? 'bg-blue-200 text-blue-800' : b.status === 'Completed' ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}`}>{b.status}</span>
-                      {b.status === 'Upcoming' && <button className="ml-2 px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-xs">Cancel</button>}
-                      {b.status === 'Completed' && <button className="ml-2 px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs">View Ticket</button>}
-                    </div>
-                  </div>
-                ))}
-                {mockBookings.length === 0 && <div className="text-gray-500 dark:text-gray-400">No bookings found.</div>}
+                  ))
+                )}
               </div>
             </div>
           )}
