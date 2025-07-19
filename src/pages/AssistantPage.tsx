@@ -2,6 +2,34 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Mic, MicOff, Bot, User } from 'lucide-react';
 import { ChatMessage } from '../types';
 
+// --- Groq API integration ---
+// REMOVE: import Groq from 'groq-sdk';
+// REMOVE: import type { ChatCompletionMessageParam } from 'groq-sdk/resources/chat/completions.js';
+
+const GROQ_API_KEY = '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';
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+
+async function fetchGroqChat(messages: {role: string, content: string}[]) {
+  const response = await fetch(GROQ_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'llama3-8b-8192',
+      messages,
+      max_tokens: 512,
+      temperature: 0.7,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error('Groq API error: ' + response.statusText);
+  }
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || 'No response from Groq';
+}
+
 const AssistantPage: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -46,44 +74,8 @@ const AssistantPage: React.FC = () => {
     }
   }, []);
 
-  const processMessage = (message: string): string => {
-    const lowerMessage = message.toLowerCase();
-
-    // Booking keywords
-    if (lowerMessage.includes('book') && lowerMessage.includes('ticket')) {
-      return "I can help you book a ticket! To proceed, I'll need:\n\n• Starting location\n• Destination\n• Preferred date and time\n\nWould you like me to redirect you to our booking page, or can you provide these details now?";
-    }
-
-    // Route finding keywords
-    if (lowerMessage.includes('route') || lowerMessage.includes('direction')) {
-      return "I can help you find the best route! Our route finder can show you:\n\n• Shortest path between locations\n• Real-time traffic updates\n• Multiple route options\n• Estimated travel times\n\nShall I take you to the route finder, or do you have specific locations in mind?";
-    }
-
-    // Bus tracking keywords
-    if (lowerMessage.includes('track') || lowerMessage.includes('where') || lowerMessage.includes('bus location')) {
-      return "I can help you track buses in real-time! Our tracking system shows:\n\n• Live bus locations\n• Estimated arrival times\n• Route information\n• Bus capacity\n\nWould you like to see the live tracking map, or are you looking for a specific bus?";
-    }
-
-    // Next bus keywords
-    if (lowerMessage.includes('next bus') || lowerMessage.includes('when')) {
-      return "Based on current schedules, here are the next departures:\n\n🚌 **City Center to Airport**: 15 mins (Bus B101)\n🚌 **Downtown to University**: 8 mins (Bus B205)\n🚌 **Mall to Residential**: 22 mins (Bus B312)\n\nWould you like more details about any of these routes?";
-    }
-
-    // Payment/price keywords
-    if (lowerMessage.includes('price') || lowerMessage.includes('cost') || lowerMessage.includes('payment')) {
-      return "Here are our current ticket prices:\n\n💰 **City Center to Airport**: $12.50\n💰 **Downtown to University**: $4.75\n💰 **Mall to Residential**: $6.25\n\nWe accept all major credit cards and digital payments. Senior citizens and students get 20% off!";
-    }
-
-    // Schedule keywords
-    if (lowerMessage.includes('schedule') || lowerMessage.includes('timetable')) {
-      return "Our buses run from 6:00 AM to 11:00 PM daily with:\n\n⏰ **Peak hours** (7-9 AM, 5-7 PM): Every 10-15 minutes\n⏰ **Regular hours**: Every 20-30 minutes\n⏰ **Late evening**: Every 45 minutes\n\nWould you like the detailed schedule for a specific route?";
-    }
-
-    // Default response
-    return "I understand you're asking about public transport. I can help you with:\n\n• **Booking tickets** - Say 'book a ticket'\n• **Finding routes** - Say 'find route'\n• **Tracking buses** - Say 'track buses'\n• **Schedule information** - Say 'bus schedule'\n• **Pricing** - Say 'ticket prices'\n\nWhat would you like help with today?";
-  };
-
-  const handleSendMessage = () => {
+  // Remove processMessage, replace with Groq API call
+  const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
 
     const userMessage: ChatMessage = {
@@ -97,18 +89,34 @@ const AssistantPage: React.FC = () => {
     setInputValue('');
     setIsTyping(true);
 
-    // Simulate AI response delay
-    setTimeout(() => {
+    try {
+      const groqMessages = [
+        { role: 'system', content: "You are an AI travel assistant. Help users with public transport, bus tracking, booking, and schedules." },
+        ...messages.map(m => ({
+          role: m.isUser ? 'user' : 'assistant',
+          content: m.content
+        })),
+        { role: 'user', content: inputValue }
+      ];
+      const aiContent = await fetchGroqChat(groqMessages);
       const aiResponse: ChatMessage = {
         id: (Date.now() + 1).toString(),
-        content: processMessage(inputValue),
+        content: aiContent,
         isUser: false,
         timestamp: new Date()
       };
-
       setMessages(prev => [...prev, aiResponse]);
+    } catch (err: any) {
+      const aiResponse: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        content: err.message || 'Error contacting Groq API',
+        isUser: false,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, aiResponse]);
+    } finally {
       setIsTyping(false);
-    }, 1000 + Math.random() * 1000);
+    }
   };
 
   const startListening = () => {
@@ -236,6 +244,7 @@ const AssistantPage: React.FC = () => {
                 onClick={handleSendMessage}
                 disabled={!inputValue.trim()}
                 className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="Send"
               >
                 <Send className="h-4 w-4" />
               </button>
