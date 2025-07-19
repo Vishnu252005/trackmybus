@@ -6,11 +6,10 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
-    // Bookings: allow users to create and read their own bookings, allow admin to read all
+    // Bookings: allow users to create and all authenticated users to read (TEMP for dev)
     match /bookings/{bookingId} {
       allow create: if request.auth != null;
-      allow read: if request.auth != null && resource.data.userId == request.auth.uid
-        || exists(/databases/$(database)/documents/admin/$(request.auth.token.email.replace('.', '_')));
+      allow read: if request.auth != null;
       allow update, delete: if false;
     }
     // Buses: allow all authenticated users to read and write (TEMP for dev)

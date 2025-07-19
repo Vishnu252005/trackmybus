@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Mic, MicOff, Bot, User } from 'lucide-react';
 import { ChatMessage } from '../types';
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../firebase/config';
 
 // --- Groq API integration ---
 // REMOVE: import Groq from 'groq-sdk';
@@ -55,6 +57,16 @@ async function translateText(text: string, targetLang: string, sourceLang?: stri
   } catch {
     return text;
   }
+}
+
+// Helper to check if user is asking for a bus from X to Y
+function parseBusQuery(text: string) {
+  // e.g. 'bus from City Center to Airport' or 'buses from X to Y'
+  const match = text.match(/bus(?:es)? from ([\w\s]+) to ([\w\s]+)/i);
+  if (match) {
+    return { from: match[1].trim(), to: match[2].trim() };
+  }
+  return null;
 }
 
 const AssistantPage: React.FC = () => {
@@ -118,6 +130,29 @@ const AssistantPage: React.FC = () => {
     setIsTyping(true);
 
     try {
+      // Check for bus route query
+      const busQuery = parseBusQuery(inputValue);
+      if (busQuery) {
+        // Search Firestore buses
+        const snap = await getDocs(collection(db, 'buses'));
+        const buses = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const found = buses.filter(b =>
+          b.start && b.end &&
+          b.start.toLowerCase().includes(busQuery.from.toLowerCase()) &&
+          b.end.toLowerCase().includes(busQuery.to.toLowerCase())
+        );
+        let reply = '';
+        if (found.length > 0) {
+          reply = `Buses from ${busQuery.from} to ${busQuery.to} (from live data):\n` +
+            found.map(b => `• ${b.name || b.number} (Capacity: ${b.capacity}${b.accessible ? ', Wheelchair Accessible' : ''})`).join('\n');
+          // Optionally, fetch timings for each bus
+        } else {
+          reply = `Sorry, no buses found from ${busQuery.from} to ${busQuery.to}.`;
+        }
+        setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), content: reply, isUser: false, timestamp: new Date() }]);
+        setIsTyping(false);
+        return;
+      }
       // Translate user input if needed
       const translatedInput = await translateText(inputValue, language);
       const groqMessages = [
