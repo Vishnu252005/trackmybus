@@ -8,6 +8,12 @@ TrackMyBus is a modern web application for real-time bus tracking, route plannin
 - Online ticket booking
 - User-friendly interface with responsive design
 - Theming support (light/dark mode)
+- Push notifications for bus arrivals and delays *(planned)*
+- User profiles and booking history *(planned)*
+- Admin dashboard for managing routes and buses *(planned)*
+- Analytics and reporting for operators *(planned)*
+- Multi-language support *(planned)*
+- Accessibility improvements for all users *(planned)*
 
 ## Tech Stack
 - **Frontend:** React, TypeScript, Vite

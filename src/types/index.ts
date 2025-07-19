@@ -45,3 +45,7 @@ export interface ChatMessage {
   isUser: boolean;
   timestamp: Date;
 }
+
+export interface User {
+  email: string;
+}

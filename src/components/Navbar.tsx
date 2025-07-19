@@ -1,11 +1,16 @@
-import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { Bus, MapPin, Calendar, MessageCircle, Home, Moon, Sun } from 'lucide-react';
+import React, { useContext, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Bus, MapPin, Calendar, MessageCircle, Home, Moon, Sun, User, LogOut, LogIn } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
+import { User as UserType } from '../types';
+import { AuthContext } from '../App';
 
 const Navbar: React.FC = () => {
   const location = useLocation();
   const { isDark, toggleTheme } = useTheme();
+  const { user, signIn, signOut } = useContext(AuthContext);
+  const navigate = useNavigate();
+  const [emailInput, setEmailInput] = useState('');
 
   const navItems = [
     { path: '/', icon: Home, label: 'Home' },
@@ -41,12 +46,21 @@ const Navbar: React.FC = () => {
             ))}
           </div>
 
-          <button
-            onClick={toggleTheme}
-            className="p-2 rounded-md text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
-          >
-            {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-          </button>
+          <div className="flex items-center space-x-4">
+            <button
+              onClick={toggleTheme}
+              className="p-2 rounded-md text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+            >
+              {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            </button>
+            <button
+              onClick={() => navigate('/profile')}
+              className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 focus:outline-none"
+              aria-label="User profile"
+            >
+              <User className="h-6 w-6 text-gray-700 dark:text-gray-300" />
+            </button>
+          </div>
         </div>
 
         {/* Mobile menu */}
