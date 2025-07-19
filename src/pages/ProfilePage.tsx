@@ -1,15 +1,9 @@
-import React, { useContext, useState, useEffect } from 'react';
+import React, { useContext, useState } from 'react';
 import { AuthContext } from '../App';
-import { User } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { User as UserIcon, Mail, Calendar as CalendarIcon, Edit3, Activity } from 'lucide-react';
-
-interface MockUser {
-  username: string;
-  email: string;
-  password: string;
-  memberSince: string;
-}
+import { auth } from '../firebase';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
 
 const getInitials = (name: string) => {
   return name
@@ -19,84 +13,87 @@ const getInitials = (name: string) => {
     .slice(0, 2);
 };
 
+function getFriendlyFirebaseError(error: any) {
+  if (!error || !error.code) return 'An unknown error occurred.';
+  switch (error.code) {
+    case 'auth/network-request-failed':
+      return 'Network error: Please check your internet connection and try again.';
+    case 'auth/email-already-in-use':
+      return 'This email is already registered. Please sign in or use a different email.';
+    case 'auth/invalid-email':
+      return 'The email address is not valid.';
+    case 'auth/wrong-password':
+      return 'Incorrect password. Please try again.';
+    case 'auth/user-not-found':
+      return 'No account found with this email.';
+    case 'auth/weak-password':
+      return 'Password should be at least 6 characters.';
+    default:
+      return error.message || 'An unknown error occurred.';
+  }
+}
+
 const ProfilePage: React.FC = () => {
   const { user, signIn, signOut } = useContext(AuthContext);
   const [tab, setTab] = useState<'signin' | 'signup'>('signin');
-  const [users, setUsers] = useState<MockUser[]>([]);
   const [signInEmail, setSignInEmail] = useState('');
   const [signInPassword, setSignInPassword] = useState('');
   const [signUpUsername, setSignUpUsername] = useState('');
   const [signUpEmail, setSignUpEmail] = useState('');
   const [signUpPassword, setSignUpPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const stored = localStorage.getItem('trackmybus_users');
-    if (stored) {
-      setUsers(JSON.parse(stored));
-    }
-  }, []);
-
-  const saveUsers = (newUsers: MockUser[]) => {
-    setUsers(newUsers);
-    localStorage.setItem('trackmybus_users', JSON.stringify(newUsers));
-  };
-
-  const handleSignUp = (e: React.FormEvent) => {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!signUpUsername || !signUpEmail || !signUpPassword) {
-      setError('All fields are required.');
-      return;
+    setLoading(true);
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, signUpEmail, signUpPassword);
+      await updateProfile(cred.user, { displayName: signUpUsername });
+      signIn(cred.user);
+      setSignUpUsername('');
+      setSignUpEmail('');
+      setSignUpPassword('');
+    } catch (err: any) {
+      setError(getFriendlyFirebaseError(err));
+    } finally {
+      setLoading(false);
     }
-    if (users.find(u => u.email === signUpEmail)) {
-      setError('Email already registered.');
-      return;
-    }
-    const newUser = {
-      username: signUpUsername,
-      email: signUpEmail,
-      password: signUpPassword,
-      memberSince: new Date().toISOString(),
-    };
-    const updatedUsers = [...users, newUser];
-    saveUsers(updatedUsers);
-    signIn(signUpEmail);
-    setSignUpUsername('');
-    setSignUpEmail('');
-    setSignUpPassword('');
   };
 
-  const handleSignIn = (e: React.FormEvent) => {
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    const found = users.find(u => u.email === signInEmail && u.password === signInPassword);
-    if (!found) {
-      setError('Invalid email or password.');
-      return;
+    setLoading(true);
+    try {
+      const cred = await signInWithEmailAndPassword(auth, signInEmail, signInPassword);
+      signIn(cred.user);
+      setSignInEmail('');
+      setSignInPassword('');
+    } catch (err: any) {
+      setError(getFriendlyFirebaseError(err));
+    } finally {
+      setLoading(false);
     }
-    signIn(signInEmail);
-    setSignInEmail('');
-    setSignInPassword('');
   };
 
   if (user) {
-    const currentUser = users.find(u => u.email === user.email);
     return (
       <div className="max-w-md mx-auto mt-10 bg-white dark:bg-gray-800 p-8 rounded shadow-lg">
         <div className="flex flex-col items-center mb-6">
           <div className="w-20 h-20 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-3xl font-bold text-blue-700 dark:text-blue-200 mb-2">
-            {getInitials(currentUser?.username || currentUser?.email || '?')}
+            {getInitials(user.displayName || user.email || '?')}
           </div>
           <div className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
             <UserIcon className="h-5 w-5 text-blue-600" />
-            {currentUser?.username || 'N/A'}
+            {user.displayName || 'N/A'}
           </div>
         </div>
         <div className="mb-4 space-y-2">
           <div className="flex items-center text-gray-700 dark:text-gray-200"><Mail className="h-4 w-4 mr-2 text-blue-500" />{user.email}</div>
-          <div className="flex items-center text-gray-700 dark:text-gray-200"><CalendarIcon className="h-4 w-4 mr-2 text-blue-500" />Member since: {currentUser ? new Date(currentUser.memberSince).toLocaleDateString() : 'N/A'}</div>
+          <div className="flex items-center text-gray-700 dark:text-gray-200"><CalendarIcon className="h-4 w-4 mr-2 text-blue-500" />Member since: {user.metadata?.creationTime ? new Date(user.metadata.creationTime).toLocaleDateString() : 'N/A'}</div>
         </div>
         <button
           className="flex items-center px-4 py-2 mb-6 bg-gray-300 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded hover:bg-gray-400 dark:hover:bg-gray-600 cursor-not-allowed"
@@ -156,8 +153,9 @@ const ProfilePage: React.FC = () => {
           <button
             type="submit"
             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            disabled={loading}
           >
-            Sign In
+            {loading ? 'Signing In...' : 'Sign In'}
           </button>
         </form>
       ) : (
@@ -189,8 +187,9 @@ const ProfilePage: React.FC = () => {
           <button
             type="submit"
             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            disabled={loading}
           >
-            Sign Up
+            {loading ? 'Signing Up...' : 'Sign Up'}
           </button>
         </form>
       )}

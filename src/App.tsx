@@ -1,4 +1,4 @@
-import React, { useState, createContext } from 'react';
+import React, { useState, useEffect, createContext } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import HomePage from './pages/HomePage';
@@ -7,11 +7,12 @@ import RoutePage from './pages/RoutePage';
 import BookingPage from './pages/BookingPage';
 import AssistantPage from './pages/AssistantPage';
 import ProfilePage from './pages/ProfilePage';
-import { User } from './types';
+import { onAuthStateChanged, signOut as firebaseSignOut, User as FirebaseUser } from 'firebase/auth';
+import { auth } from './firebase';
 
 export const AuthContext = createContext<{
-  user: User | null;
-  signIn: (email: string) => void;
+  user: FirebaseUser | null;
+  signIn: (user: FirebaseUser) => void;
   signOut: () => void;
 }>({
   user: null,
@@ -20,10 +21,20 @@ export const AuthContext = createContext<{
 });
 
 function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<FirebaseUser | null>(null);
 
-  const signIn = (email: string) => setUser({ email });
-  const signOut = () => setUser(null);
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const signIn = (firebaseUser: FirebaseUser) => setUser(firebaseUser);
+  const signOut = () => {
+    firebaseSignOut(auth);
+    setUser(null);
+  };
 
   return (
     <AuthContext.Provider value={{ user, signIn, signOut }}>
