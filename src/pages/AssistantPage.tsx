@@ -44,6 +44,7 @@ const AssistantPage: React.FC = () => {
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  const [language, setLanguage] = useState('English');
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -91,7 +92,7 @@ const AssistantPage: React.FC = () => {
 
     try {
       const groqMessages = [
-        { role: 'system', content: "You are an AI travel assistant. Help users with public transport, bus tracking, booking, and schedules." },
+        { role: 'system', content: `You are an AI travel assistant. Respond in ${language}. Help users with public transport, bus tracking, booking, and schedules.` },
         ...messages.map(m => ({
           role: m.isUser ? 'user' : 'assistant',
           content: m.content
@@ -153,9 +154,9 @@ const AssistantPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col h-[600px]">
           {/* Chat Messages */}
-          <div className="h-96 overflow-y-auto p-6 space-y-4">
+          <div className="flex-1 overflow-y-auto p-6 space-y-4" style={{ minHeight: 0 }}>
             {messages.map((message) => (
               <div
                 key={message.id}
@@ -218,14 +219,30 @@ const AssistantPage: React.FC = () => {
               ))}
             </div>
 
-            {/* Input Area */}
-            <div className="flex space-x-4">
+            {/* Input Area - sticky at bottom */}
+            <div className="flex space-x-4 sticky bottom-0 bg-white dark:bg-gray-800 pt-2 pb-1 z-10">
+              <div className="flex justify-end mb-2">
+                <select
+                  value={language}
+                  onChange={e => setLanguage(e.target.value)}
+                  className="px-2 py-1 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 text-sm focus:outline-none"
+                  title="Select language"
+                  aria-label="Select language"
+                >
+                  <option value="English">English</option>
+                  <option value="Hindi">Hindi</option>
+                  <option value="Tamil">Tamil</option>
+                  <option value="Malayalam">Malayalam</option>
+                  <option value="Telugu">Telugu</option>
+                  <option value="Kannada">Kannada</option>
+                </select>
+              </div>
               <div className="flex-1 relative">
                 <input
                   type="text"
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSendMessage())}
                   placeholder="Type your message or use voice input..."
                   className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white pr-12"
                 />
@@ -236,6 +253,8 @@ const AssistantPage: React.FC = () => {
                       ? 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400' 
                       : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
                   }`}
+                  title={isListening ? 'Stop Listening' : 'Start Voice Input'}
+                  aria-label={isListening ? 'Stop Listening' : 'Start Voice Input'}
                 >
                   {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                 </button>
@@ -245,11 +264,11 @@ const AssistantPage: React.FC = () => {
                 disabled={!inputValue.trim()}
                 className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 title="Send"
+                aria-label="Send"
               >
                 <Send className="h-4 w-4" />
               </button>
             </div>
-
             <div className="mt-2 text-xs text-gray-500 dark:text-gray-400 text-center">
               {isListening ? (
                 <span className="text-red-600 dark:text-red-400">🎤 Listening...</span>

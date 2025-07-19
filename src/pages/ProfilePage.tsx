@@ -4,8 +4,9 @@ import { useNavigate } from 'react-router-dom';
 import { User as UserIcon, Mail, Calendar as CalendarIcon, Edit3, Activity, CheckCircle2, XCircle, RefreshCw, LogOut, Camera, KeyRound } from 'lucide-react';
 import { auth } from '../firebase';
 import { db } from '../firebase/config';
-import { doc, setDoc, serverTimestamp, getDoc, updateDoc, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, doc, setDoc, updateDoc, deleteDoc, serverTimestamp, query, where, getDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, sendEmailVerification, sendPasswordResetEmail } from 'firebase/auth';
+import AssistantPage from './AssistantPage';
 
 const getInitials = (name: string) => {
   return name
@@ -97,11 +98,25 @@ const ProfilePage: React.FC = () => {
   const [dashboardTab, setDashboardTab] = useState<'profile' | 'bookings' | 'settings'>('profile');
   const [role, setRole] = useState<'admin' | 'user' | null>(null);
   const [adminTab, setAdminTab] = useState<'users' | 'bookings' | 'buses' | 'settings'>('users');
-  const [buses, setBuses] = useState(mockBuses);
-  const [newBus, setNewBus] = useState({ name: '', route: '', capacity: '', accessible: false });
+  const [bookings, setBookings] = useState<any[]>([]);
+  const [bookingsLoading, setBookingsLoading] = useState(false);
+  const [buses, setBuses] = useState<any[]>([]);
+  const [busesLoading, setBusesLoading] = useState(false);
+  const [timingsMap, setTimingsMap] = useState<{ [busId: string]: any[] }>({});
+  const [timingInputs, setTimingInputs] = useState<{ [busId: string]: { time: string; availableSeats: string } }>({});
+  // Update newBus state to have start and end
+  const [newBus, setNewBus] = useState({ name: '', start: '', end: '', capacity: '', accessible: false });
+  const [editBusId, setEditBusId] = useState<string | null>(null);
+  const [editBus, setEditBus] = useState<any>(null);
+  const [editTiming, setEditTiming] = useState<{ busId: string; timingId: string; time: string; availableSeats: string } | null>(null);
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [userDeleteId, setUserDeleteId] = useState<string | null>(null);
+  const [addTimingBusId, setAddTimingBusId] = useState<string | null>(null);
+  const [groqInput, setGroqInput] = useState('');
+  const [groqResponse, setGroqResponse] = useState('');
+  const [groqLoading, setGroqLoading] = useState(false);
+  const [showAIPanel, setShowAIPanel] = useState(true);
 
   // Fetch user profile from Firestore
   useEffect(() => {
@@ -259,11 +274,67 @@ const ProfilePage: React.FC = () => {
     }).finally(() => setUsersLoading(false));
   }, [role, adminTab]);
 
+  // Fetch bookings for admin
+  useEffect(() => {
+    if (role !== 'admin' || adminTab !== 'bookings') return;
+    setBookingsLoading(true);
+    getDocs(collection(db, 'bookings')).then(snap => {
+      const bookings = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setBookings(bookings);
+    }).finally(() => setBookingsLoading(false));
+  }, [role, adminTab]);
+  // Fetch buses for admin
+  useEffect(() => {
+    if (role !== 'admin' || adminTab !== 'buses') return;
+    setBusesLoading(true);
+    getDocs(collection(db, 'buses')).then(async snap => {
+      const buses = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setBuses(buses);
+      // Fetch timings for each bus
+      const timingsObj: { [busId: string]: any[] } = {};
+      await Promise.all(buses.map(async (bus: any) => {
+        const timingsSnap = await getDocs(collection(db, 'buses', bus.id, 'timings'));
+        timingsObj[bus.id] = timingsSnap.docs.map(t => ({ id: t.id, ...t.data() }));
+      }));
+      setTimingsMap(timingsObj);
+    }).finally(() => setBusesLoading(false));
+  }, [role, adminTab]);
+
   const handleDeleteUser = async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this user? This cannot be undone.')) return;
     await deleteDoc(doc(db, 'users', id));
     setAllUsers(users => users.filter(u => u.id !== id));
   };
+
+  async function askGroq(prompt: string) {
+    setGroqLoading(true);
+    setGroqResponse('');
+    setGroqInput(prompt);
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer YOUR_GROQ_API_KEY`, // <-- replace with your key or env
+        },
+        body: JSON.stringify({
+          model: 'mixtral-8x7b-32768',
+          messages: [
+            { role: 'system', content: 'You are an AI assistant for bus admin tasks.' },
+            { role: 'user', content: prompt },
+          ],
+          max_tokens: 512,
+          temperature: 0.2,
+        }),
+      });
+      const data = await res.json();
+      setGroqResponse(data.choices?.[0]?.message?.content || 'No response.');
+    } catch (e) {
+      setGroqResponse('Error contacting Groq API.');
+    } finally {
+      setGroqLoading(false);
+    }
+  }
 
   if (user) {
     if (role === null) {
@@ -274,7 +345,7 @@ const ProfilePage: React.FC = () => {
       return (
         <div className="flex min-h-[80vh]">
           {/* Sidebar */}
-          <aside className="w-64 bg-gray-900 text-white flex-shrink-0 hidden md:flex flex-col py-8 px-4 rounded-l-lg shadow-lg">
+          <aside className="w-64 bg-white dark:bg-gray-900 text-gray-900 dark:text-white flex-shrink-0 hidden md:flex flex-col py-8 px-4 rounded-l-lg shadow-lg">
             <div className="mb-8 text-2xl font-bold flex items-center gap-2">
               <UserIcon className="h-7 w-7 text-blue-400" /> Admin Dashboard
             </div>
@@ -286,7 +357,7 @@ const ProfilePage: React.FC = () => {
             </nav>
           </aside>
           {/* Main content */}
-          <main className="flex-1 p-4 md:p-12 bg-transparent md:bg-white dark:md:bg-gray-800 rounded-r-lg shadow-lg md:ml-0 mt-0 md:mt-8">
+          <main className="flex-1 p-4 md:p-12 bg-transparent md:bg-white dark:md:bg-gray-900 rounded-r-lg shadow-lg md:ml-0 mt-0 md:mt-8 text-gray-900 dark:text-white">
             {adminTab === 'users' && (
               <>
                 <h2 className="text-3xl font-bold mb-6">Users</h2>
@@ -342,49 +413,244 @@ const ProfilePage: React.FC = () => {
             {adminTab === 'bookings' && (
               <>
                 <h2 className="text-3xl font-bold mb-6">Bookings</h2>
-                <div className="text-gray-700 dark:text-gray-200 mb-4">Booking management coming soon!</div>
+                {bookingsLoading ? (
+                  <div className="text-gray-500 dark:text-gray-400">Loading bookings...</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full bg-gray-100 dark:bg-gray-700 rounded-lg">
+                      <thead>
+                        <tr className="text-left">
+                          <th className="px-4 py-2">User</th>
+                          <th className="px-4 py-2">Email</th>
+                          <th className="px-4 py-2">Route</th>
+                          <th className="px-4 py-2">Bus</th>
+                          <th className="px-4 py-2">Seat</th>
+                          <th className="px-4 py-2">Date</th>
+                          <th className="px-4 py-2">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bookings.map(b => (
+                          <tr key={b.id} className="border-t border-gray-300 dark:border-gray-600">
+                            <td className="px-4 py-2">{b.username || '-'}</td>
+                            <td className="px-4 py-2">{b.email || '-'}</td>
+                            <td className="px-4 py-2">{b.route || '-'}</td>
+                            <td className="px-4 py-2">{b.busName || '-'}</td>
+                            <td className="px-4 py-2">{b.seat || '-'}</td>
+                            <td className="px-4 py-2">{b.date ? (typeof b.date === 'string' ? b.date : (b.date.seconds ? new Date(b.date.seconds * 1000).toLocaleString() : '-')) : '-'}</td>
+                            <td className="px-4 py-2">{b.status || '-'}</td>
+                          </tr>
+                        ))}
+                        {bookings.length === 0 && <tr><td colSpan={7} className="text-gray-500 dark:text-gray-400 px-4 py-2">No bookings found.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </>
             )}
             {adminTab === 'buses' && (
               <>
                 <h2 className="text-3xl font-bold mb-6">Buses</h2>
                 {/* Add Bus Form */}
-                <form className="mb-6 flex flex-col md:flex-row gap-4 items-end" onSubmit={e => {
+                <form className="mb-6 flex flex-col md:flex-row gap-4 items-end" onSubmit={async e => {
                   e.preventDefault();
-                  if (!newBus.name || !newBus.route || !newBus.capacity) return;
-                  setBuses(prev => [...prev, { ...newBus, id: `bus${prev.length + 1}`, capacity: Number(newBus.capacity) }]);
-                  setNewBus({ name: '', route: '', capacity: '', accessible: false });
+                  if (!newBus.name || !newBus.start || !newBus.end || !newBus.capacity) return;
+                  const busDoc = await addDoc(collection(db, 'buses'), {
+                    name: newBus.name,
+                    start: newBus.start,
+                    end: newBus.end,
+                    capacity: Number(newBus.capacity),
+                    accessible: newBus.accessible,
+                    createdAt: serverTimestamp(),
+                  });
+                  setNewBus({ name: '', start: '', end: '', capacity: '', accessible: false });
+                  setBusesLoading(true);
+                  const snap = await getDocs(collection(db, 'buses'));
+                  const buses = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                  setBuses(buses);
+                  setBusesLoading(false);
                 }}>
-                  <input type="text" placeholder="Bus Name/Number" className="px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none" value={newBus.name} onChange={e => setNewBus({ ...newBus, name: e.target.value })} required />
-                  <input type="text" placeholder="Route (e.g. A → B)" className="px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none" value={newBus.route} onChange={e => setNewBus({ ...newBus, route: e.target.value })} required />
-                  <input type="number" placeholder="Capacity" className="px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none" value={newBus.capacity} onChange={e => setNewBus({ ...newBus, capacity: e.target.value })} required min={1} />
-                  <label className="flex items-center gap-2 text-gray-700 dark:text-gray-200">
+                  <input type="text" placeholder="Bus Name/Number" className="px-3 py-2 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600" value={newBus.name} onChange={e => setNewBus({ ...newBus, name: e.target.value })} required title="Bus name/number" />
+                  <input type="text" placeholder="Start Location" className="px-3 py-2 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600" value={newBus.start} onChange={e => setNewBus({ ...newBus, start: e.target.value })} required title="Start location" />
+                  <input type="text" placeholder="End Location" className="px-3 py-2 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600" value={newBus.end} onChange={e => setNewBus({ ...newBus, end: e.target.value })} required title="End location" />
+                  <input type="number" placeholder="Capacity" className="px-3 py-2 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600" value={newBus.capacity} onChange={e => setNewBus({ ...newBus, capacity: e.target.value })} required min={1} title="Bus capacity" />
+                  <label className="flex items-center gap-2">
                     <input type="checkbox" checked={newBus.accessible} onChange={e => setNewBus({ ...newBus, accessible: e.target.checked })} /> Wheelchair Accessible
                   </label>
                   <button type="submit" className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">Add Bus</button>
                 </form>
                 {/* Bus List */}
-                <div className="overflow-x-auto">
-                  <table className="min-w-full bg-gray-100 dark:bg-gray-700 rounded-lg">
-                    <thead>
-                      <tr className="text-left">
-                        <th className="px-4 py-2">Name/Number</th>
-                        <th className="px-4 py-2">Route</th>
-                        <th className="px-4 py-2">Capacity</th>
-                        <th className="px-4 py-2">Accessible</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {buses.map(bus => (
-                        <tr key={bus.id} className="border-t border-gray-300 dark:border-gray-600">
-                          <td className="px-4 py-2 font-semibold">{bus.name}</td>
-                          <td className="px-4 py-2">{bus.route}</td>
-                          <td className="px-4 py-2">{bus.capacity}</td>
-                          <td className="px-4 py-2">{bus.accessible ? 'Yes' : 'No'}</td>
+                {busesLoading ? (
+                  <div className="text-gray-500 dark:text-gray-400">Loading buses...</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full bg-gray-100 dark:bg-gray-700 rounded-lg">
+                      <thead>
+                        <tr className="text-left">
+                          <th className="px-4 py-2">Name/Number</th>
+                          <th className="px-4 py-2">Start</th>
+                          <th className="px-4 py-2">End</th>
+                          <th className="px-4 py-2">Capacity</th>
+                          <th className="px-4 py-2">Accessible</th>
+                          <th className="px-4 py-2">Timings</th>
+                          <th className="px-4 py-2">Actions</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {buses.map(bus => (
+                          <React.Fragment key={bus.id}>
+                            <tr className="border-t border-gray-300 dark:border-gray-600">
+                              <td className="px-4 py-2 text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800">{bus.name}</td>
+                              <td className="px-4 py-2 text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800">{bus.start}</td>
+                              <td className="px-4 py-2 text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800">{bus.end}</td>
+                              <td className="px-4 py-2 text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800">{bus.capacity}</td>
+                              <td className="px-4 py-2 text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800">{bus.accessible ? 'Yes' : 'No'}</td>
+                              <td className="px-4 py-2 text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800">
+                                <div className="space-y-2">
+                                  {(timingsMap[bus.id] || []).map(timing => (
+                                    <div key={timing.id} className="flex items-center gap-2">
+                                      <span>{timing.time}</span>
+                                      <span className="text-xs text-gray-500">Seats: {timing.availableSeats}</span>
+                                      <button onClick={() => setEditTiming({ busId: bus.id, timingId: timing.id, time: timing.time, availableSeats: timing.availableSeats })} className="px-1 py-0.5 bg-yellow-500 text-white rounded text-xs">Edit</button>
+                                      <button onClick={async () => {
+                                        if (!window.confirm('Delete this timing?')) return;
+                                        await deleteDoc(doc(db, 'buses', bus.id, 'timings', timing.id));
+                                        const timingsSnap = await getDocs(collection(db, 'buses', bus.id, 'timings'));
+                                        setTimingsMap(prev => ({ ...prev, [bus.id]: timingsSnap.docs.map(t => ({ id: t.id, ...t.data() })) }));
+                                      }} className="px-1 py-0.5 bg-red-600 text-white rounded text-xs">Delete</button>
+                                      {editTiming && editTiming.busId === bus.id && editTiming.timingId === timing.id && (
+                                        <form className="flex gap-2 mt-1" onSubmit={async e => {
+                                          e.preventDefault();
+                                          await updateDoc(doc(db, 'buses', bus.id, 'timings', timing.id), {
+                                            time: editTiming.time,
+                                            availableSeats: Number(editTiming.availableSeats),
+                                          });
+                                          const timingsSnap = await getDocs(collection(db, 'buses', bus.id, 'timings'));
+                                          setTimingsMap(prev => ({ ...prev, [bus.id]: timingsSnap.docs.map(t => ({ id: t.id, ...t.data() })) }));
+                                          setEditTiming(null);
+                                        }}>
+                                          <input type="text" value={editTiming.time} onChange={e => setEditTiming(et => et ? { ...et, time: e.target.value } : null)} className="px-2 py-1 rounded border w-24 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600" required title="Edit timing time" placeholder="Time (e.g. 10:00)" />
+                                          <input type="number" value={editTiming.availableSeats} onChange={e => setEditTiming(et => et ? { ...et, availableSeats: e.target.value } : null)} className="px-2 py-1 rounded border w-16 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600" required min={1} title="Edit available seats" placeholder="Seats" />
+                                          <button type="submit" className="px-2 py-1 bg-green-600 text-white rounded">Save</button>
+                                          <button type="button" onClick={() => setEditTiming(null)} className="px-2 py-1 bg-gray-400 text-white rounded">Cancel</button>
+                                        </form>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </td>
+                              <td className="px-4 py-2 text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800">
+                                <button
+                                  className="px-2 py-1 bg-blue-600 text-white rounded mt-2"
+                                  onClick={() => setAddTimingBusId(bus.id)}
+                                  style={{ display: addTimingBusId === bus.id ? 'none' : 'inline-block' }}
+                                >
+                                  Add Timing
+                                </button>
+                                {addTimingBusId === bus.id && (
+                                  <form className="flex gap-2 mt-2" onSubmit={async e => {
+                                    e.preventDefault();
+                                    const { time = '', availableSeats = '' } = timingInputs[bus.id] || {};
+                                    if (!time || !availableSeats) return;
+                                    await addDoc(collection(db, 'buses', bus.id, 'timings'), {
+                                      time,
+                                      availableSeats: Number(availableSeats),
+                                    });
+                                    // Refresh timings
+                                    const timingsSnap = await getDocs(collection(db, 'buses', bus.id, 'timings'));
+                                    setTimingsMap(prev => ({ ...prev, [bus.id]: timingsSnap.docs.map(t => ({ id: t.id, ...t.data() })) }));
+                                    setTimingInputs(prev => ({ ...prev, [bus.id]: { time: '', availableSeats: '' } }));
+                                    setAddTimingBusId(null);
+                                  }}>
+                                    <input
+                                      type="text"
+                                      placeholder="Time (e.g. 10:00)"
+                                      title="Timing time"
+                                      className="px-2 py-1 rounded border w-24 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600"
+                                      value={timingInputs[bus.id]?.time || ''}
+                                      onChange={e => setTimingInputs(prev => ({ ...prev, [bus.id]: { ...prev[bus.id], time: e.target.value } }))}
+                                      required
+                                    />
+                                    <input
+                                      type="number"
+                                      placeholder="Seats"
+                                      title="Available seats"
+                                      className="px-2 py-1 rounded border w-16 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600"
+                                      value={timingInputs[bus.id]?.availableSeats || ''}
+                                      onChange={e => setTimingInputs(prev => ({ ...prev, [bus.id]: { ...prev[bus.id], availableSeats: e.target.value } }))}
+                                      required
+                                      min={1}
+                                    />
+                                    <button type="submit" className="px-2 py-1 bg-green-600 text-white rounded">Add</button>
+                                    <button type="button" className="px-2 py-1 bg-gray-400 text-white rounded" onClick={() => { setAddTimingBusId(null); setTimingInputs(prev => ({ ...prev, [bus.id]: { time: '', availableSeats: '' } })); }}>Cancel</button>
+                                  </form>
+                                )}
+                              </td>
+                              <td className="px-4 py-2 text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800">
+                                <button onClick={() => { setEditBusId(bus.id); setEditBus(bus); }} className="px-2 py-1 bg-yellow-500 text-white rounded mr-2">Edit</button>
+                                <button onClick={async () => {
+                                  if (!window.confirm('Delete this bus and all its timings?')) return;
+                                  const timingsSnap = await getDocs(collection(db, 'buses', bus.id, 'timings'));
+                                  await Promise.all(timingsSnap.docs.map(t => deleteDoc(doc(db, 'buses', bus.id, 'timings', t.id))));
+                                  await deleteDoc(doc(db, 'buses', bus.id));
+                                  setBuses(buses => buses.filter(b => b.id !== bus.id));
+                                }} className="px-2 py-1 bg-red-600 text-white rounded">Delete</button>
+                              </td>
+                            </tr>
+                            {editBusId === bus.id && (
+                              <tr>
+                                <td colSpan={7}>
+                                  <form className="flex gap-2" onSubmit={async e => {
+                                    e.preventDefault();
+                                    await updateDoc(doc(db, 'buses', bus.id), {
+                                      name: editBus.name,
+                                      start: editBus.start,
+                                      end: editBus.end,
+                                      capacity: Number(editBus.capacity),
+                                      accessible: editBus.accessible,
+                                    });
+                                    setEditBusId(null);
+                                    setEditBus(null);
+                                    setBusesLoading(true);
+                                    const snap = await getDocs(collection(db, 'buses'));
+                                    setBuses(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                                    setBusesLoading(false);
+                                  }}>
+                                    <input type="text" value={editBus.name} onChange={e => setEditBus({ ...editBus, name: e.target.value })} className="px-2 py-1 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600" required title="Bus name/number" placeholder="Bus Name/Number" />
+                                    <input type="text" value={editBus.start} onChange={e => setEditBus({ ...editBus, start: e.target.value })} className="px-2 py-1 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600" required title="Start location" placeholder="Start Location" />
+                                    <input type="text" value={editBus.end} onChange={e => setEditBus({ ...editBus, end: e.target.value })} className="px-2 py-1 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600" required title="End location" placeholder="End Location" />
+                                    <input type="number" value={editBus.capacity} onChange={e => setEditBus({ ...editBus, capacity: e.target.value })} className="px-2 py-1 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600" required min={1} title="Bus capacity" placeholder="Capacity" />
+                                    <label className="flex items-center gap-2">
+                                      <input type="checkbox" checked={editBus.accessible} onChange={e => setEditBus({ ...editBus, accessible: e.target.checked })} /> Accessible
+                                    </label>
+                                    <button type="submit" className="px-2 py-1 bg-green-600 text-white rounded">Save</button>
+                                    <button type="button" onClick={() => { setEditBusId(null); setEditBus(null); }} className="px-2 py-1 bg-gray-400 text-white rounded">Cancel</button>
+                                  </form>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        ))}
+                        {buses.length === 0 && <tr><td colSpan={7} className="text-gray-500 dark:text-gray-400 px-4 py-2">No buses found.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {/* Wheelchair accessibility summary below the table */}
+                <div className="mt-6">
+                  <h3 className="text-lg font-semibold mb-2 text-gray-900 dark:text-white">Wheelchair Accessibility</h3>
+                  <ul className="space-y-2">
+                    {buses.map(bus => (
+                      <li key={bus.id} className="flex items-center gap-2 text-gray-900 dark:text-white">
+                        <span className="font-medium">Bus {bus.name}:</span>
+                        {bus.accessible ? (
+                          <span className="flex items-center text-green-600 dark:text-green-400"><svg xmlns='http://www.w3.org/2000/svg' className='h-5 w-5 mr-1' fill='none' viewBox='0 0 24 24' stroke='currentColor'><path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M5 13l4 4L19 7' /></svg>Wheelchair Accessible</span>
+                        ) : (
+                          <span className="flex items-center text-red-600 dark:text-red-400"><svg xmlns='http://www.w3.org/2000/svg' className='h-5 w-5 mr-1' fill='none' viewBox='0 0 24 24' stroke='currentColor'><path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M6 18L18 6M6 6l12 12' /></svg>Not Wheelchair Accessible</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </>
             )}
@@ -396,6 +662,29 @@ const ProfilePage: React.FC = () => {
             )}
             <button onClick={() => { signOut(); navigate('/'); }} className="mt-8 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 flex items-center"><LogOut className="h-4 w-4 mr-1" />Sign Out</button>
           </main>
+          {role === 'admin' && showAIPanel && (
+            <div className="fixed right-4 top-8 w-[420px] max-w-full z-[100] bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
+              <button
+                className="absolute top-2 right-2 text-gray-500 dark:text-gray-300 hover:text-red-600 dark:hover:text-red-400 text-xl font-bold focus:outline-none"
+                onClick={() => setShowAIPanel(false)}
+                title="Close AI Assistant"
+                aria-label="Close AI Assistant"
+              >
+                ×
+              </button>
+              <AssistantPage />
+            </div>
+          )}
+          {role === 'admin' && !showAIPanel && (
+            <button
+              className="fixed right-6 bottom-6 z-50 bg-blue-600 dark:bg-blue-700 text-white rounded-full shadow-lg p-4 hover:bg-blue-700 dark:hover:bg-blue-800 focus:outline-none"
+              onClick={() => setShowAIPanel(true)}
+              title="Open AI Assistant"
+              aria-label="Open AI Assistant"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11c0-1.657 1.343-3 3-3s3 1.343 3 3-1.343 3-3 3-3-1.343-3-3zm0 0c0-1.657-1.343-3-3-3s-3 1.343-3 3 1.343 3 3 3 3-1.343 3-3zm0 0v2m0 4h.01" /></svg>
+            </button>
+          )}
         </div>
       );
     }
@@ -405,7 +694,7 @@ const ProfilePage: React.FC = () => {
     return (
       <div className="flex min-h-[80vh]">
         {/* Sidebar */}
-        <aside className="w-64 bg-gray-900 text-white flex-shrink-0 hidden md:flex flex-col py-8 px-4 rounded-l-lg shadow-lg">
+        <aside className="w-64 bg-white dark:bg-gray-900 text-gray-900 dark:text-white flex-shrink-0 hidden md:flex flex-col py-8 px-4 rounded-l-lg shadow-lg">
           <div className="mb-8 text-2xl font-bold flex items-center gap-2">
             <UserIcon className="h-7 w-7 text-blue-400" /> Dashboard
           </div>
@@ -422,7 +711,7 @@ const ProfilePage: React.FC = () => {
           <button onClick={() => setDashboardTab('settings')} className={`flex flex-col items-center px-2 ${dashboardTab === 'settings' ? 'text-blue-400' : ''}`}><Edit3 className="h-6 w-6" /><span className="text-xs">Settings</span></button>
         </aside>
         {/* Main content */}
-        <main className="flex-1 p-4 md:p-12 bg-transparent md:bg-white dark:md:bg-gray-800 rounded-r-lg shadow-lg md:ml-0 mt-0 md:mt-8">
+        <main className="flex-1 p-4 md:p-12 bg-transparent md:bg-white dark:md:bg-gray-900 rounded-r-lg shadow-lg md:ml-0 mt-0 md:mt-8 text-gray-900 dark:text-white">
           {/* Toast */}
           {toast && (
             <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded shadow text-white ${toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'}`}>{toast.message}</div>
@@ -480,7 +769,7 @@ const ProfilePage: React.FC = () => {
                 <form onSubmit={handleProfileUpdate} className="mb-8 flex flex-col md:flex-row md:items-end gap-4">
                   <div className="flex-1">
                     <label htmlFor="edit-username" className="block text-gray-700 dark:text-gray-200 mb-1">Username</label>
-                    <input id="edit-username" type="text" className="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none" value={editUsername} onChange={e => setEditUsername(e.target.value)} required title="Edit your username" placeholder="Username" />
+                    <input id="edit-username" type="text" className="w-full px-3 py-2 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600" value={editUsername} onChange={e => setEditUsername(e.target.value)} required title="Edit your username" placeholder="Username" />
                   </div>
                   <div className="flex-1">
                     <label htmlFor="edit-photo" className="block text-gray-700 dark:text-gray-200 mb-1">Profile Picture</label>
@@ -548,7 +837,7 @@ const ProfilePage: React.FC = () => {
           <input
             type="email"
             placeholder="Email"
-            className="px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none"
+            className="px-3 py-2 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600"
             value={signInEmail}
             onChange={e => setSignInEmail(e.target.value)}
             required
@@ -556,7 +845,7 @@ const ProfilePage: React.FC = () => {
           <input
             type="password"
             placeholder="Password"
-            className="px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none"
+            className="px-3 py-2 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600"
             value={signInPassword}
             onChange={e => setSignInPassword(e.target.value)}
             required
@@ -577,7 +866,7 @@ const ProfilePage: React.FC = () => {
             type="text"
             placeholder="Username"
             title="Username"
-            className="px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none"
+            className="px-3 py-2 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600"
             value={signUpUsername}
             onChange={e => setSignUpUsername(e.target.value)}
             required
@@ -588,7 +877,7 @@ const ProfilePage: React.FC = () => {
             type="email"
             placeholder="Email"
             title="Email"
-            className="px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none"
+            className="px-3 py-2 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600"
             value={signUpEmail}
             onChange={e => setSignUpEmail(e.target.value)}
             required
@@ -599,7 +888,7 @@ const ProfilePage: React.FC = () => {
             type="password"
             placeholder="Password"
             title="Password"
-            className="px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none"
+            className="px-3 py-2 rounded border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600"
             value={signUpPassword}
             onChange={e => setSignUpPassword(e.target.value)}
             required
