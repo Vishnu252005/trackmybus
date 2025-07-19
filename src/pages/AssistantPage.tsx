@@ -10,7 +10,7 @@ const AssistantPage: React.FC = () => {
       isUser: false,
       timestamp: new Date()
     }
-  ]);//update
+  ]);
   const [inputValue, setInputValue] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
