@@ -30,6 +30,33 @@ async function fetchGroqChat(messages: {role: string, content: string}[]) {
   return data.choices?.[0]?.message?.content || 'No response from Groq';
 }
 
+// Add translation helper
+async function translateText(text: string, targetLang: string, sourceLang?: string): Promise<string> {
+  if (targetLang === 'English') return text;
+  // Map dropdown language to LibreTranslate codes
+  const langMap: Record<string, string> = {
+    English: 'en',
+    Hindi: 'hi',
+    Tamil: 'ta',
+    Malayalam: 'ml',
+    Telugu: 'te',
+    Kannada: 'kn',
+  };
+  const to = langMap[targetLang] || 'en';
+  const from = sourceLang ? langMap[sourceLang] : 'auto';
+  try {
+    const res = await fetch('https://libretranslate.de/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: text, source: from, target: to, format: 'text' })
+    });
+    const data = await res.json();
+    return data.translatedText || text;
+  } catch {
+    return text;
+  }
+}
+
 const AssistantPage: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -91,18 +118,25 @@ const AssistantPage: React.FC = () => {
     setIsTyping(true);
 
     try {
+      // Translate user input if needed
+      const translatedInput = await translateText(inputValue, language);
       const groqMessages = [
         { role: 'system', content: `You are an AI travel assistant. Respond in ${language}. Help users with public transport, bus tracking, booking, and schedules.` },
         ...messages.map(m => ({
           role: m.isUser ? 'user' : 'assistant',
           content: m.content
         })),
-        { role: 'user', content: inputValue }
+        { role: 'user', content: translatedInput }
       ];
       const aiContent = await fetchGroqChat(groqMessages);
+      // Translate AI output back to English if needed
+      let finalContent = aiContent;
+      if (language !== 'English') {
+        finalContent = await translateText(aiContent, 'English', language);
+      }
       const aiResponse: ChatMessage = {
         id: (Date.now() + 1).toString(),
-        content: aiContent,
+        content: finalContent,
         isUser: false,
         timestamp: new Date()
       };
@@ -277,6 +311,13 @@ const AssistantPage: React.FC = () => {
               )}
             </div>
           </div>
+        </div>
+        <div className="mb-2 text-xs text-gray-500 dark:text-gray-400 text-right">
+          {language !== 'English' ? (
+            <span>Auto-translation enabled: Your message and AI replies will be translated to and from {language}.</span>
+          ) : (
+            <span>Type in any language. AI will reply in English.</span>
+          )}
         </div>
       </div>
     </div>
