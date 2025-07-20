@@ -965,14 +965,24 @@ const AssistantPage: React.FC = () => {
         // Fetch all bookings from Firestore
         const snap = await getDocs(collection(db, 'bookings'));
         const bookings: FirestoreBooking[] = snap.docs.map(doc => ({ id: doc.id, ...(doc.data() as Omit<FirestoreBooking, 'id'>) }));
-        let reply = '';
+        
         if (bookings.length > 0) {
-          reply = 'All bookings (from live data):\n' +
-            bookings.map(b => `• ${b.username || b.email || 'User'}: ${b.route || '-'} | Bus: ${b.busName || '-'} | Seat: ${b.seat || '-'} | Date: ${b.date ? (typeof b.date === 'string' ? b.date : (b.date && typeof b.date === 'object' && 'seconds' in b.date ? new Date(b.date.seconds * 1000).toLocaleString() : '-')) : '-'} | Status: ${b.status || '-'}`).join('\n');
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(),
+            isUser: false,
+            timestamp: new Date(),
+            type: 'booking-cards',
+            bookings: bookings,
+          }]);
         } else {
-          reply = 'No bookings found.';
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(),
+            content: 'No bookings found.',
+            isUser: false,
+            timestamp: new Date(),
+            type: 'text',
+          }]);
         }
-        setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), content: reply, isUser: false, timestamp: new Date() }]);
         setIsTyping(false);
         return;
       }
@@ -986,7 +996,9 @@ const AssistantPage: React.FC = () => {
         })),
         { role: 'user', content: translatedInput }
       ];
-      const aiContent = await fetchGroqChat(groqMessages);
+      const aiContent = await fetchGroqChat(groqMessages);  
+      console.log(aiContent)
+    
       // Translate AI output back to English if needed
       let finalContent = aiContent;
       if (language !== 'English') {
