@@ -121,6 +121,7 @@ const ProfilePage: React.FC = () => {
   const [showAIPanel, setShowAIPanel] = useState(true);
   const [userBookings, setUserBookings] = useState<any[]>([]);
   const [userBookingsLoading, setUserBookingsLoading] = useState(false);
+  const [userCredits, setUserCredits] = useState<number>(0);
 
   // Fetch user profile from Firestore
   useEffect(() => {
@@ -129,13 +130,30 @@ const ProfilePage: React.FC = () => {
     getDoc(doc(db, 'users', user.uid))
       .then((snap) => {
         if (snap.exists()) {
-          setProfile(snap.data());
-          setEditUsername(snap.data().username || '');
+          const userData = snap.data();
+          setProfile(userData);
+          setEditUsername(userData.username || '');
+          setUserCredits(userData.credits || 0);
         }
       })
       .catch(() => setProfile(null))
       .finally(() => setProfileLoading(false));
   }, [user]);
+
+  // Function to update user credits
+  const updateUserCredits = async (newCredits: number) => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, 'users', user.uid), {
+        credits: newCredits
+      });
+      setUserCredits(newCredits);
+      setProfile((prev: any) => ({ ...prev, credits: newCredits }));
+      setToast({ type: 'success', message: `Credits updated to ${newCredits}!` });
+    } catch (error) {
+      setToast({ type: 'error', message: 'Failed to update credits.' });
+    }
+  };
 
   // Handle photo preview
   useEffect(() => {
@@ -224,12 +242,13 @@ const ProfilePage: React.FC = () => {
         email: signUpEmail,
         createdAt: serverTimestamp(),
         photoURL: '',
+        credits: 100, // Starting credits for new users
       });
       signIn(cred.user);
       setSignUpUsername('');
       setSignUpEmail('');
       setSignUpPassword('');
-      setToast({ type: 'success', message: 'Account created successfully!' });
+      setToast({ type: 'success', message: 'Account created successfully! You have 100 starting credits!' });
     } catch (err: any) {
       setError(getFriendlyFirebaseError(err));
       setToast({ type: 'error', message: getFriendlyFirebaseError(err) });
@@ -468,6 +487,10 @@ const ProfilePage: React.FC = () => {
                 <div style="font-size: 14px; color: #9ca3af; margin-bottom: 5px;">DEPARTURE TIME</div>
                 <div style="font-size: 18px; font-weight: bold;">${booking.timing || 'N/A'}</div>
               </div>
+              <div>
+                <div style="font-size: 14px; color: #9ca3af; margin-bottom: 5px;">CREDITS EARNED</div>
+                <div style="font-size: 18px; font-weight: bold; color: #10b981;">💰 +${booking.creditsEarned || 0}</div>
+              </div>
             </div>
           </div>
           
@@ -558,6 +581,7 @@ const ProfilePage: React.FC = () => {
                           <th className="px-4 py-2">Avatar</th>
                           <th className="px-4 py-2">Username</th>
                           <th className="px-4 py-2">Email</th>
+                          <th className="px-4 py-2">Credits</th>
                           <th className="px-4 py-2">Created</th>
                           <th className="px-4 py-2">Actions</th>
                         </tr>
@@ -576,6 +600,25 @@ const ProfilePage: React.FC = () => {
                             </td>
                             <td className="px-4 py-2 font-semibold">{u.username || '-'}</td>
                             <td className="px-4 py-2">{u.email || '-'}</td>
+                            <td className="px-4 py-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-yellow-600 font-bold">💰</span>
+                                <span className="font-mono">{u.credits || 0}</span>
+                                <button 
+                                  onClick={() => {
+                                    const newCredits = (u.credits || 0) + 50;
+                                    updateDoc(doc(db, 'users', u.id), { credits: newCredits });
+                                    setAllUsers(users => users.map(user => 
+                                      user.id === u.id ? { ...user, credits: newCredits } : user
+                                    ));
+                                  }}
+                                  className="px-2 py-1 bg-green-500 text-white rounded text-xs hover:bg-green-600"
+                                  title="Add 50 credits"
+                                >
+                                  +50
+                                </button>
+                              </div>
+                            </td>
                             <td className="px-4 py-2">{
                               u.createdAt
                                 ? (typeof u.createdAt === 'string'
@@ -590,7 +633,7 @@ const ProfilePage: React.FC = () => {
                             </td>
                           </tr>
                         ))}
-                        {allUsers.length === 0 && <tr><td colSpan={5} className="text-gray-500 dark:text-gray-400 px-4 py-2">No users found. (Check Firestore 'users' collection and field names.)</td></tr>}
+                        {allUsers.length === 0 && <tr><td colSpan={6} className="text-gray-500 dark:text-gray-400 px-4 py-2">No users found. (Check Firestore 'users' collection and field names.)</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -640,6 +683,7 @@ const ProfilePage: React.FC = () => {
                           <th className="px-4 py-2">Bus</th>
                           <th className="px-4 py-2">Seat</th>
                           <th className="px-4 py-2">Date</th>
+                          <th className="px-4 py-2">Credits Earned</th>
                           <th className="px-4 py-2">Status</th>
                           <th className="px-4 py-2">Actions</th>
                         </tr>
@@ -666,6 +710,12 @@ const ProfilePage: React.FC = () => {
                                   new Date(b.date).toLocaleString() : 
                                   (b.date.seconds ? new Date(b.date.seconds * 1000).toLocaleString() : '-')
                               ) : '-'}
+                            </td>
+                            <td className="px-4 py-2">
+                              <div className="flex items-center gap-1">
+                                <span className="text-green-600 font-bold">💰</span>
+                                <span className="font-mono text-sm">+{b.creditsEarned || 0}</span>
+                              </div>
                             </td>
                             <td className="px-4 py-2">
                               <span className={`px-2 py-1 rounded text-xs font-medium ${
@@ -1257,7 +1307,7 @@ const ProfilePage: React.FC = () => {
                     ) : (
                       <button onClick={handleSendVerification} disabled={sendingVerification} className="ml-2 text-yellow-600 flex items-center hover:underline">
                         <XCircle className="h-4 w-4 mr-1" />Verify Email{sendingVerification && <RefreshCw className="h-4 w-4 animate-spin ml-1" />}
-        </button>
+                      </button>
                     )}
                   </div>
                   <div className="flex items-center gap-2 text-gray-700 dark:text-gray-200">
@@ -1268,6 +1318,23 @@ const ProfilePage: React.FC = () => {
                     <CalendarIcon className="h-5 w-5 text-blue-500" />
                     Last login: {user.metadata?.lastSignInTime ? new Date(user.metadata.lastSignInTime).toLocaleString() : 'N/A'}
                   </div>
+                  
+                  {/* Credit System Display */}
+                  <div className="flex items-center gap-4 mt-4 p-4 bg-gradient-to-r from-purple-100 to-blue-100 dark:from-purple-900 dark:to-blue-900 rounded-lg border border-purple-200 dark:border-purple-700">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center">
+                        <span className="text-white font-bold text-sm">💰</span>
+                      </div>
+                      <div>
+                        <div className="text-sm text-gray-600 dark:text-gray-300">Credits</div>
+                        <div className="text-2xl font-bold text-gray-900 dark:text-white">{userCredits}</div>
+                      </div>
+                    </div>
+                    <div className="text-sm text-gray-600 dark:text-gray-300">
+                      Earn credits by booking tickets!
+                    </div>
+                  </div>
+                  
                   <div className="flex items-center gap-2 mt-2">
                     <button onClick={() => setEditMode(v => !v)} className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center"><Edit3 className="h-4 w-4 mr-1" />{editMode ? 'Cancel' : 'Edit Profile'}</button>
                     <button onClick={handlePasswordReset} disabled={sendingReset} className="px-3 py-1 bg-gray-300 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded hover:bg-gray-400 dark:hover:bg-gray-600 flex items-center ml-2"><KeyRound className="h-4 w-4 mr-1" />Change Password{sendingReset && <RefreshCw className="h-4 w-4 animate-spin ml-1" />}</button>
@@ -1354,6 +1421,7 @@ const ProfilePage: React.FC = () => {
                             <div><span className="font-medium">Bus:</span> {b.busName || '-'}</div>
                             <div><span className="font-medium">Seat:</span> <span className="font-mono bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">{b.seat || '-'}</span></div>
                             <div><span className="font-medium">Timing:</span> {b.timing || '-'}</div>
+                            <div><span className="font-medium">Credits Earned:</span> <span className="flex items-center gap-1"><span className="text-green-600 font-bold">💰</span><span className="font-mono">+{b.creditsEarned || 0}</span></span></div>
                           </div>
                         </div>
                         <div className="flex flex-col gap-2">

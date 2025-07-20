@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useContext } from 'react';
 import { Send, Mic, MicOff, Bot, User } from 'lucide-react';
-import { collection, getDocs, doc, updateDoc, arrayUnion, addDoc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, arrayUnion, addDoc, setDoc, getDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import BusCard from '../components/BusCard';
 import { AuthContext } from '../App';
@@ -178,6 +178,7 @@ const AssistantPage: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [bookedSeats, setBookedSeats] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const [language, setLanguage] = useState('English');
@@ -185,6 +186,14 @@ const AssistantPage: React.FC = () => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Refresh booked seats when timing is selected
+  useEffect(() => {
+    if (selectedBus && selectedTiming) {
+      const timingId = `timing_${selectedTiming.time.replace(/:/g, '_')}`;
+      fetchBookedSeats(selectedBus.id, timingId);
+    }
+  }, [selectedBus, selectedTiming]);
 
   useEffect(() => {
     // Initialize speech recognition
@@ -217,10 +226,48 @@ const AssistantPage: React.FC = () => {
     setSelectedTiming(null);
     setSelectedSeat(null);
   };
+  // Function to fetch booked seats for a specific bus and timing
+  const fetchBookedSeats = async (busId: string, timingId: string) => {
+    try {
+      console.log('Fetching booked seats for bus:', busId, 'timing:', timingId);
+      
+      // First try to get the timing document
+      const timingRef = doc(db, 'buses', busId, 'timings', timingId);
+      const timingDoc = await getDoc(timingRef);
+      
+      if (timingDoc.exists()) {
+        const timingData = timingDoc.data();
+        const takenSeats = timingData.takenSeats || [];
+        console.log('Found taken seats from timing doc:', takenSeats);
+        setBookedSeats(takenSeats);
+      } else {
+        // If timing document doesn't exist, check bookings collection
+        console.log('No timing document found, checking bookings collection...');
+        const bookingsQuery = query(
+          collection(db, 'bookings'),
+          where('busId', '==', busId),
+          where('timingId', '==', timingId)
+        );
+        const bookingsSnap = await getDocs(bookingsQuery);
+        const bookedSeatsFromBookings = bookingsSnap.docs.map(doc => (doc.data() as any).seat).filter(Boolean);
+        console.log('Found booked seats from bookings:', bookedSeatsFromBookings);
+        setBookedSeats(bookedSeatsFromBookings);
+      }
+    } catch (error) {
+      console.error('Error fetching booked seats:', error);
+      setBookedSeats([]);
+    }
+  };
+
   // Handler for timing selection (step 2)
-  const handleSelectTiming = (timing: any) => {
+  const handleSelectTiming = async (timing: any) => {
     setSelectedTiming(timing);
     setSelectedSeat(null);
+    // Fetch booked seats when timing is selected
+    if (selectedBus) {
+      const timingId = `timing_${timing.time.replace(/:/g, '_')}`;
+      await fetchBookedSeats(selectedBus.id, timingId);
+    }
   };
   // Handler for seat selection (step 3)
   const handleSelectSeat = async (seat: string) => {
@@ -247,8 +294,14 @@ const AssistantPage: React.FC = () => {
     }
     
     try {
-      // Check if timing has an ID, if not, create one
-      const timingId = selectedTiming.id || `timing_${Date.now()}`;
+      // Check user's current credits
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      const userData = userDoc.data();
+      const currentCredits = userData?.credits || 0;
+      const creditReward = 10; // Credits to add when booking a ticket
+      
+      // Create a consistent timing ID based on the time
+      const timingId = `timing_${selectedTiming.time.replace(/:/g, '_')}`;
       
       // Update Firestore: add seat to takenSeats for this timing
       const timingRef = doc(db, 'buses', selectedBus.id, 'timings', timingId);
@@ -281,14 +334,25 @@ const AssistantPage: React.FC = () => {
         busId: selectedBus.id,
         timingId: timingId,
         timing: selectedTiming.time,
-        bookingDate: new Date()
+        bookingDate: new Date(),
+        creditsEarned: creditReward
       };
       
       await addDoc(collection(db, 'bookings'), bookingData);
       
+      // Add credits to user account as reward for booking
+      const newCredits = currentCredits + creditReward;
+      await updateDoc(doc(db, 'users', user.uid), {
+        credits: newCredits
+      });
+      
+      // Refresh booked seats after successful booking
+      console.log('Refreshing booked seats after booking seat:', seat);
+      await fetchBookedSeats(selectedBus.id, timingId);
+      
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
-        content: `✅ SUCCESS! Your booking has been confirmed!\n\n🚌 Bus: ${selectedBus.name}\n📍 Route: ${selectedBus.start} → ${selectedBus.end}\n⏰ Time: ${selectedTiming.time}\n💺 Seat: ${seat}\n\nYour booking has been registered in the system. You can view your bookings anytime by asking "Show my bookings".`,
+        content: `✅ SUCCESS! Your booking has been confirmed!\n\n🚌 Bus: ${selectedBus.name}\n📍 Route: ${selectedBus.start} → ${selectedBus.end}\n⏰ Time: ${selectedTiming.time}\n💺 Seat: ${seat}\n💰 Credits Earned: +${creditReward}\n💰 Total Credits: ${newCredits}\n\nYour booking has been registered in the system. You can view your bookings anytime by asking "Show my bookings".`,
         isUser: false,
         timestamp: new Date(),
         type: 'text',
@@ -512,21 +576,88 @@ const AssistantPage: React.FC = () => {
             {selectedBus && selectedTiming && !selectedSeat && (
               <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 mt-4">
                 <h3 className="text-lg font-bold mb-2 text-gray-900 dark:text-white">Select a seat for {selectedBus.name} at {selectedTiming.time}</h3>
+                
+                {/* Debug Info */}
+                <div className="mb-2 text-xs text-gray-500">
+                  Booked seats: {bookedSeats.join(', ') || 'None'}
+                </div>
+                
+                {/* Seat Legend */}
+                <div className="flex gap-4 mb-4 text-sm">
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 bg-blue-500 rounded"></div>
+                    <span className="text-gray-700 dark:text-gray-300">Available</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 bg-red-500 rounded"></div>
+                    <span className="text-gray-700 dark:text-gray-300">Booked</span>
+                  </div>
+                  {selectedBus.accessible && (
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 bg-purple-500 rounded border-2 border-yellow-400 relative">
+                        <span className="absolute -top-1 -right-1 text-xs">♿</span>
+                      </div>
+                      <span className="text-gray-700 dark:text-gray-300">Wheelchair Accessible</span>
+                    </div>
+                  )}
+                </div>
+                
                 <div className="grid grid-cols-6 gap-2">
                   {Array.from({ length: Number(selectedBus.capacity) || 40 }, (_, i) => {
                     const seatNum = (i + 1).toString();
-                    const taken = Array.isArray(selectedTiming.takenSeats) ? selectedTiming.takenSeats.includes(seatNum) : false;
+                    const taken = bookedSeats.includes(seatNum);
+                    const isWheelchairSeat = selectedBus.accessible && (seatNum === '1' || seatNum === '2' || seatNum === '39' || seatNum === '40');
+                    
+                    // Debug logging for booked seats
+                    if (taken) {
+                      console.log(`Seat ${seatNum} is booked`);
+                    }
+                    
                     return (
                       <button
                         key={seatNum}
-                        className={`px-3 py-2 rounded ${taken ? 'bg-gray-400 text-white cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                        className={`px-3 py-2 rounded font-medium relative ${
+                          taken 
+                            ? 'bg-red-500 text-white cursor-not-allowed hover:bg-red-600' 
+                            : isWheelchairSeat
+                            ? 'bg-purple-500 text-white hover:bg-purple-600 border-2 border-yellow-400'
+                            : 'bg-blue-500 text-white hover:bg-blue-600'
+                        }`}
                         onClick={() => !taken && handleSelectSeat(seatNum)}
                         disabled={taken}
+                        title={
+                          taken 
+                            ? `Seat ${seatNum} - Booked` 
+                            : isWheelchairSeat 
+                            ? `Seat ${seatNum} - Wheelchair Accessible` 
+                            : `Seat ${seatNum} - Available`
+                        }
                       >
                         {seatNum}
+                        {isWheelchairSeat && !taken && (
+                          <span className="absolute -top-1 -right-1 text-xs">♿</span>
+                        )}
+                        {isWheelchairSeat && taken && (
+                          <span className="absolute -top-1 -right-1 text-xs">♿</span>
+                        )}
                       </button>
                     );
                   })}
+                </div>
+                
+                {/* Cancel Button */}
+                <div className="mt-4 flex justify-center">
+                  <button
+                    onClick={() => {
+                      setSelectedBus(null);
+                      setSelectedTiming(null);
+                      setSelectedSeat(null);
+                      setBookedSeats([]);
+                    }}
+                    className="px-6 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 font-medium"
+                  >
+                    Cancel Booking
+                  </button>
                 </div>
               </div>
             )}
