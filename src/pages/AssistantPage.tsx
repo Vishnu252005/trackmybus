@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useContext } from 'react';
-import { Send, Mic, MicOff, Bot, User } from 'lucide-react';
+import { Send, Mic, MicOff, Bot, User, MapPin, Users } from 'lucide-react';
 import { collection, getDocs, doc, updateDoc, arrayUnion, addDoc, setDoc, getDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import BusCard from '../components/BusCard';
@@ -127,21 +127,45 @@ async function fetchBusesFromFirestore(busQuery?: { from: string; to: string }) 
       b.end.toLowerCase().includes(busQuery.to.toLowerCase())
     );
     if (found.length > 0) {
-      reply = `Buses from ${busQuery.from} to ${busQuery.to} (from your database):\n`;
+      reply = `Buses from ${busQuery.from} to ${busQuery.to} (Real-time data):\n`;
     } else {
       reply = 'No buses found in your database.';
     }
   } else if (found.length > 0) {
-    reply = 'All buses (from your database):\n';
+    reply = 'All buses (Real-time data):\n';
   } else {
     reply = 'No buses found in your database.';
   }
+  
   for (const b of found) {
     reply += `• ${b.name} (From: ${b.start} To: ${b.end}, Capacity: ${b.capacity}${b.accessible ? ', Wheelchair Accessible' : ''})\n`;
+    
+    // Fetch real-time timings and booking data
     const timingsSnap = await getDocs(collection(db, 'buses', b.id, 'timings'));
     const timings = timingsSnap.docs.map(t => t.data());
+    
     if (timings.length > 0) {
-      reply += '   Timings: ' + timings.map(t => `${t.time} (Seats: ${t.availableSeats})`).join(', ') + '\n';
+      reply += '   Real-time Timings:\n';
+      for (const timing of timings) {
+        const timingId = `timing_${timing.time.replace(/:/g, '_')}`;
+        
+        // Get real-time booking data for this timing
+        const bookingsQuery = query(
+          collection(db, 'bookings'),
+          where('busId', '==', b.id),
+          where('timingId', '==', timingId),
+          where('status', 'in', ['confirmed', 'upcoming'])
+        );
+        const bookingsSnap = await getDocs(bookingsQuery);
+        const bookedSeats = bookingsSnap.docs.map(doc => (doc.data() as any).seat).filter(Boolean);
+        const availableSeats = (timing.availableSeats || b.capacity) - bookedSeats.length;
+        
+        reply += `     ⏰ ${timing.time} - Available: ${availableSeats}/${timing.availableSeats || b.capacity} seats`;
+        if (bookedSeats.length > 0) {
+          reply += ` (Booked: ${bookedSeats.join(', ')})`;
+        }
+        reply += '\n';
+      }
     } else {
       reply += '   Timings: Not available\n';
     }
@@ -402,10 +426,35 @@ const AssistantPage: React.FC = () => {
             b.end.toLowerCase().includes(busQuery.to.toLowerCase())
           );
         }
-        // For each bus, fetch timings
+        // For each bus, fetch timings and real-time booking data
         const busesWithTimings = await Promise.all(found.map(async (b) => {
           const timingsSnap = await getDocs(collection(db, 'buses', b.id, 'timings'));
-          return { ...b, timings: timingsSnap.docs.map(t => t.data()) };
+          const timings = timingsSnap.docs.map(t => t.data());
+          
+          // Get real-time booking data for each timing
+          const timingsWithBookings = await Promise.all(timings.map(async (timing) => {
+            const timingId = `timing_${timing.time.replace(/:/g, '_')}`;
+            
+            // Get real-time booking data for this timing
+            const bookingsQuery = query(
+              collection(db, 'bookings'),
+              where('busId', '==', b.id),
+              where('timingId', '==', timingId),
+              where('status', 'in', ['confirmed', 'upcoming'])
+            );
+            const bookingsSnap = await getDocs(bookingsQuery);
+            const bookedSeats = bookingsSnap.docs.map(doc => (doc.data() as any).seat).filter(Boolean);
+            const availableSeats = (timing.availableSeats || b.capacity) - bookedSeats.length;
+            
+            return {
+              ...timing,
+              bookedSeats,
+              availableSeats,
+              totalSeats: timing.availableSeats || b.capacity
+            };
+          }));
+          
+          return { ...b, timings: timingsWithBookings };
         }));
         if (busesWithTimings.length > 0) {
           setMessages(prev => [...prev, {
@@ -520,30 +569,88 @@ const AssistantPage: React.FC = () => {
               msg.type === 'bus-cards' && msg.buses ? (
                 <div key={msg.id} className="mb-4">
                   <div className="flex flex-col gap-4">
-                    {msg.buses.map((bus: FirestoreBus & { timings?: any[] }) => (
-                      <div key={bus.id} className="relative">
-                        <BusCard bus={{
-                          ...bus,
-                          number: bus.name,
-                          route: `${bus.start} → ${bus.end}`,
-                          status: 'on-time',
-                          currentLocation: { address: bus.start, lat: 0, lng: 0 },
-                          eta: 0,
-                          distance: 0,
-                          occupancy: 0,
-                          capacity: bus.capacity,
-                          destination: bus.end || '',
-                        }} />
-                        <button
-                          className="absolute top-4 right-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 shadow"
-                          onClick={() => handleBookBus(bus)}
-                        >
-                          Book
-                        </button>
-                      </div>
-                    ))}
+                    {msg.buses.map((bus: FirestoreBus & { timings?: any[] }) => {
+                      // Calculate real-time occupancy from timings
+                      const totalBookedSeats = bus.timings?.reduce((total, timing) => 
+                        total + (timing.bookedSeats?.length || 0), 0) || 0;
+                      const realTimeOccupancy = totalBookedSeats;
+                      const occupancyPercentage = (realTimeOccupancy / bus.capacity) * 100;
+                      
+                      return (
+                        <div key={bus.id} className="relative">
+                          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow border border-gray-200 dark:border-gray-700">
+                            <div className="p-6">
+                              <div className="flex justify-between items-start mb-4">
+                                <div>
+                                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Bus {bus.name}</h3>
+                                  <p className="text-sm text-gray-600 dark:text-gray-400">{bus.start} → {bus.end}</p>
+                                </div>
+                                <span className="px-2 py-1 rounded-full text-xs font-medium text-green-600 bg-green-100 dark:bg-green-900/20">
+                                  Real-time
+                                </span>
+                              </div>
+
+                              <div className="space-y-3">
+                                <div className="flex items-center space-x-2 text-sm">
+                                  <MapPin className="h-4 w-4 text-gray-400" />
+                                  <span className="text-gray-600 dark:text-gray-400">{bus.start}</span>
+                                </div>
+
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center space-x-2 text-sm">
+                                    <Users className="h-4 w-4 text-gray-400" />
+                                    <span className="text-gray-600 dark:text-gray-400">
+                                      {realTimeOccupancy}/{bus.capacity} seats booked
+                                    </span>
+                                  </div>
+                                  <div className="w-20 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                                    <div
+                                      className={`h-2 rounded-full ${
+                                        occupancyPercentage > 80 ? 'bg-red-500' : 
+                                        occupancyPercentage > 50 ? 'bg-orange-500' : 'bg-green-500'
+                                      }`}
+                                      style={{ width: `${occupancyPercentage}%` }}
+                                    />
+                                  </div>
+                                </div>
+
+                                {/* Real-time timings */}
+                                {bus.timings && bus.timings.length > 0 && (
+                                  <div className="space-y-2">
+                                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Real-time Timings:</div>
+                                    {bus.timings.map((timing, idx) => (
+                                      <div key={idx} className="flex items-center justify-between text-sm">
+                                        <span className="text-gray-600 dark:text-gray-400">
+                                          ⏰ {timing.time}
+                                        </span>
+                                        <span className={`px-2 py-1 rounded text-xs ${
+                                          timing.availableSeats > 0 ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                        }`}>
+                                          {timing.availableSeats}/{timing.totalSeats} available
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            className="absolute top-4 right-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 shadow font-medium"
+                            onClick={() => handleBookBus(bus)}
+                          >
+                            🎫 Book Now
+                          </button>
+                        </div>
+                                              );
+                      })}
+                    </div>
+                    <div className="mt-4 text-center">
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        💡 Click "🎫 Book Now" on any bus to see available seats and make your booking!
+                      </p>
+                    </div>
                   </div>
-                </div>
               ) : (
                 <div key={msg.id} className={`flex ${msg.isUser ? 'justify-end' : 'justify-start'} mb-2`}>
                   <div className={`max-w-[80%] px-4 py-3 rounded-lg shadow ${msg.isUser ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white'}`}>

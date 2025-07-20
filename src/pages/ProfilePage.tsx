@@ -1428,19 +1428,53 @@ const ProfilePage: React.FC = () => {
                           {b.status === 'upcoming' && (
                             <button 
                               onClick={async () => {
-                                if (window.confirm('Are you sure you want to cancel this booking?')) {
-                                  try {
-                                    await updateDoc(doc(db, 'bookings', b.id), {
-                                      status: 'cancelled'
-                                    });
-                                    setToast({ type: 'success', message: 'Booking cancelled successfully!' });
+                                if (window.confirm('Are you sure you want to cancel this booking? This will also remove the credits earned from this booking.')) {
+                                                                      try {
+                                      console.log('Cancelling booking:', b.id);
+                                      console.log('Booking data:', b);
+                                      console.log('User ID:', user.uid);
+                                      
+                                      // Update booking status to cancelled
+                                      await updateDoc(doc(db, 'bookings', b.id), {
+                                        status: 'cancelled',
+                                        cancelledAt: new Date()
+                                      });
+                                    
+                                    console.log('Booking status updated to cancelled');
+                                    
+                                    // Remove credits earned from this booking
+                                    const creditsToRemove = b.creditsEarned || 0;
+                                    console.log('Credits to remove:', creditsToRemove);
+                                    
+                                    if (creditsToRemove > 0) {
+                                      const userDoc = await getDoc(doc(db, 'users', user.uid));
+                                      if (userDoc.exists()) {
+                                        const userData = userDoc.data();
+                                        const currentCredits = userData?.credits || 0;
+                                        const newCredits = Math.max(0, currentCredits - creditsToRemove);
+                                        
+                                        console.log('Updating user credits:', currentCredits, '->', newCredits);
+                                        
+                                        await updateDoc(doc(db, 'users', user.uid), {
+                                          credits: newCredits
+                                        });
+                                        
+                                        // Update local state
+                                        setUserCredits(newCredits);
+                                        setProfile((prev: any) => ({ ...prev, credits: newCredits }));
+                                      }
+                                    }
+                                    
+                                    setToast({ type: 'success', message: `Booking cancelled successfully! ${creditsToRemove > 0 ? `${creditsToRemove} credits removed.` : ''}` });
+                                    
                                     // Refresh user bookings
                                     const q = query(collection(db, 'bookings'), where('userId', '==', user.uid));
                                     const snap = await getDocs(q);
                                     const updatedBookings = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                                     setUserBookings(updatedBookings);
                                   } catch (error) {
-                                    setToast({ type: 'error', message: 'Failed to cancel booking. Please try again.' });
+                                    console.error('Error cancelling booking:', error);
+                                    setToast({ type: 'error', message: `Failed to cancel booking: ${error instanceof Error ? error.message : 'Unknown error'}` });
                                   }
                                 }
                               }}
@@ -1450,12 +1484,70 @@ const ProfilePage: React.FC = () => {
                             </button>
                           )}
                           {b.status === 'confirmed' && (
-                            <button 
-                              onClick={() => generateTicketPDF(b)}
-                              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium"
-                            >
-                              View Ticket
-                            </button>
+                            <div className="flex gap-2">
+                              <button 
+                                onClick={() => generateTicketPDF(b)}
+                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium"
+                              >
+                                View Ticket
+                              </button>
+                              <button 
+                                onClick={async () => {
+                                  if (window.confirm('Are you sure you want to cancel this confirmed booking? This will also remove the credits earned from this booking.')) {
+                                    try {
+                                      console.log('Cancelling confirmed booking:', b.id);
+                                      console.log('Confirmed booking data:', b);
+                                      console.log('User ID:', user.uid);
+                                      
+                                      // Update booking status to cancelled
+                                      await updateDoc(doc(db, 'bookings', b.id), {
+                                        status: 'cancelled',
+                                        cancelledAt: new Date()
+                                      });
+                                      
+                                      console.log('Confirmed booking status updated to cancelled');
+                                      
+                                      // Remove credits earned from this booking
+                                      const creditsToRemove = b.creditsEarned || 0;
+                                      console.log('Credits to remove from confirmed booking:', creditsToRemove);
+                                      
+                                      if (creditsToRemove > 0) {
+                                        const userDoc = await getDoc(doc(db, 'users', user.uid));
+                                        if (userDoc.exists()) {
+                                          const userData = userDoc.data();
+                                          const currentCredits = userData?.credits || 0;
+                                          const newCredits = Math.max(0, currentCredits - creditsToRemove);
+                                          
+                                          console.log('Updating user credits from confirmed booking:', currentCredits, '->', newCredits);
+                                          
+                                          await updateDoc(doc(db, 'users', user.uid), {
+                                            credits: newCredits
+                                          });
+                                          
+                                          // Update local state
+                                          setUserCredits(newCredits);
+                                          setProfile((prev: any) => ({ ...prev, credits: newCredits }));
+                                        }
+                                      }
+                                      
+                                      setToast({ type: 'success', message: `Booking cancelled successfully! ${creditsToRemove > 0 ? `${creditsToRemove} credits removed.` : ''}` });
+                                      
+                                      // Refresh user bookings
+                                      const q = query(collection(db, 'bookings'), where('userId', '==', user.uid));
+                                      const snap = await getDocs(q);
+                                      const updatedBookings = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                                      setUserBookings(updatedBookings);
+                                    } catch (error) {
+                                      console.error('Error cancelling confirmed booking:', error);
+                                      setToast({ type: 'error', message: `Failed to cancel booking: ${error instanceof Error ? error.message : 'Unknown error'}` });
+                                    }
+                                  }
+                                }}
+                                className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 text-sm font-medium"
+                              >
+                                Cancel Booking
+                              </button>
+                            </div>
                           )}
                           {b.status === 'cancelled' && (
                             <span className="px-4 py-2 bg-gray-300 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded text-sm font-medium">
