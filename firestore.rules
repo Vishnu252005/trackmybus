@@ -1,26 +1,28 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // TEMP: Allow all authenticated users to read all users
+    // Users: only user can write, any authenticated user can read
     match /users/{userId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
-    // Bookings: allow users to create and all authenticated users to read (TEMP for dev)
+    // Bookings: only authenticated users can create/read their own bookings
     match /bookings/{bookingId} {
       allow create: if request.auth != null;
-      allow read: if request.auth != null;
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
       allow update, delete: if false;
     }
-    // Buses: allow all authenticated users to read and write (TEMP for dev)
+    // Buses: anyone can read, only authenticated users can write
     match /buses/{busId} {
-      allow read, write: if request.auth != null;
-      // Timings subcollection
+      allow read: if true;
+      allow write: if request.auth != null;
+      // Timings subcollection: anyone can read, only authenticated users can write
       match /timings/{timingId} {
-        allow read, write: if request.auth != null;
+        allow read: if true;
+        allow write: if request.auth != null;
       }
     }
-    // Allow authenticated users to read the admin collection
+    // Admin collection: only authenticated users can read
     match /admin/{docId} {
       allow read: if request.auth != null;
     }

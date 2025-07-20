@@ -369,7 +369,7 @@ const ProfilePage: React.FC = () => {
     }
     if (role === 'admin') {
       // Admin dashboard
-      return (
+    return (
         <div className="flex min-h-[80vh]">
           {/* Sidebar */}
           <aside className="w-64 bg-white dark:bg-gray-900 text-gray-900 dark:text-white flex-shrink-0 hidden md:flex flex-col py-8 px-4 rounded-l-lg shadow-lg">
@@ -564,7 +564,7 @@ const ProfilePage: React.FC = () => {
                                       )}
                                     </div>
                                   ))}
-                                </div>
+          </div>
                               </td>
                               <td className="px-4 py-2 text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800">
                                 <button
@@ -661,7 +661,7 @@ const ProfilePage: React.FC = () => {
                         {buses.length === 0 && <tr><td colSpan={7} className="text-gray-500 dark:text-gray-400 px-4 py-2">No buses found.</td></tr>}
                       </tbody>
                     </table>
-                  </div>
+          </div>
                 )}
                 {/* Wheelchair accessibility summary below the table */}
                 <div className="mt-6">
@@ -678,7 +678,7 @@ const ProfilePage: React.FC = () => {
                       </li>
                     ))}
                   </ul>
-                </div>
+        </div>
               </>
             )}
             {adminTab === 'settings' && (
@@ -700,17 +700,17 @@ const ProfilePage: React.FC = () => {
                 ×
               </button>
               <AssistantPage />
-            </div>
+        </div>
           )}
           {role === 'admin' && !showAIPanel && (
-            <button
+        <button
               className="fixed right-6 bottom-6 z-50 bg-blue-600 dark:bg-blue-700 text-white rounded-full shadow-lg p-4 hover:bg-blue-700 dark:hover:bg-blue-800 focus:outline-none"
               onClick={() => setShowAIPanel(true)}
               title="Open AI Assistant"
               aria-label="Open AI Assistant"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11c0-1.657 1.343-3 3-3s3 1.343 3 3-1.343 3-3 3-3-1.343-3-3zm0 0c0-1.657-1.343-3-3-3s-3 1.343-3 3 1.343 3 3 3 3-1.343 3-3zm0 0v2m0 4h.01" /></svg>
-            </button>
+        </button>
           )}
         </div>
       );
@@ -774,7 +774,7 @@ const ProfilePage: React.FC = () => {
                     ) : (
                       <button onClick={handleSendVerification} disabled={sendingVerification} className="ml-2 text-yellow-600 flex items-center hover:underline">
                         <XCircle className="h-4 w-4 mr-1" />Verify Email{sendingVerification && <RefreshCw className="h-4 w-4 animate-spin ml-1" />}
-                      </button>
+        </button>
                     )}
                   </div>
                   <div className="flex items-center gap-2 text-gray-700 dark:text-gray-200">

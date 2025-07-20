@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useContext } from 'react';
 import { Send, Mic, MicOff, Bot, User } from 'lucide-react';
-import { ChatMessage } from '../types';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, arrayUnion, addDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import BusCard from '../components/BusCard';
+import { AuthContext } from '../App';
 
 // --- Groq API integration ---
 // REMOVE: import Groq from 'groq-sdk';
@@ -69,15 +70,111 @@ function parseBusQuery(text: string) {
   return null;
 }
 
+// Helper to check if user is asking for bookings
+function isBookingQuery(text: string) {
+  // e.g. 'show bookings', 'list all bookings', 'booking for ...'
+  return /\b(bookings?|list bookings|show bookings|booking for)\b/i.test(text);
+}
+
+// Helper: strict bus query detection (tool-only pattern)
+function isBusQuery(text: string) {
+  return /\bbus(es)?\b/i.test(text);
+}
+
+// Helper: detect 'X to Y' route queries (even if 'bus' is not mentioned)
+function isRouteQuery(text: string) {
+  // e.g. 'kollam to tenkasi', 'city center to airport'
+  return /([\w\s]+) to ([\w\s]+)/i.test(text);
+}
+function parseRouteQuery(text: string) {
+  const match = text.match(/([\w\s]+) to ([\w\s]+)/i);
+  if (match) {
+    return { from: match[1].trim(), to: match[2].trim() };
+  }
+  return null;
+}
+
+// Type for Firestore bus documents (should match Firestore structure)
+type FirestoreBus = {
+  id: string;
+  name: string;
+  start: string;
+  end: string;
+  capacity: number;
+  accessible?: boolean;
+};
+
+// Local type for assistant chat messages supporting bus-cards
+export type AssistantChatMessage = {
+  id: string;
+  content?: string;
+  isUser: boolean;
+  timestamp: Date;
+  type?: 'text' | 'bus-cards';
+  buses?: (FirestoreBus & { timings?: any[] })[];
+};
+
+// Tool: fetch buses from Firestore (tool-only, never AI)
+async function fetchBusesFromFirestore(busQuery?: { from: string; to: string }) {
+  const snap = await getDocs(collection(db, 'buses'));
+  const buses: FirestoreBus[] = snap.docs.map(doc => ({ id: doc.id, ...(doc.data() as Omit<FirestoreBus, 'id'>) }));
+  let found = buses;
+  let reply = '';
+  if (busQuery) {
+    found = buses.filter(b =>
+      b.start && b.end &&
+      b.start.toLowerCase().includes(busQuery.from.toLowerCase()) &&
+      b.end.toLowerCase().includes(busQuery.to.toLowerCase())
+    );
+    if (found.length > 0) {
+      reply = `Buses from ${busQuery.from} to ${busQuery.to} (from your database):\n`;
+    } else {
+      reply = 'No buses found in your database.';
+    }
+  } else if (found.length > 0) {
+    reply = 'All buses (from your database):\n';
+  } else {
+    reply = 'No buses found in your database.';
+  }
+  for (const b of found) {
+    reply += `• ${b.name} (From: ${b.start} To: ${b.end}, Capacity: ${b.capacity}${b.accessible ? ', Wheelchair Accessible' : ''})\n`;
+    const timingsSnap = await getDocs(collection(db, 'buses', b.id, 'timings'));
+    const timings = timingsSnap.docs.map(t => t.data());
+    if (timings.length > 0) {
+      reply += '   Timings: ' + timings.map(t => `${t.time} (Seats: ${t.availableSeats})`).join(', ') + '\n';
+    } else {
+      reply += '   Timings: Not available\n';
+    }
+  }
+  return reply;
+}
+
+// Type for Firestore booking documents (should match Firestore structure)
+type FirestoreBooking = {
+  id: string;
+  username?: string;
+  email?: string;
+  route?: string;
+  busName?: string;
+  seat?: string;
+  date?: string | { seconds: number };
+  status?: string;
+};
+
 const AssistantPage: React.FC = () => {
-  const [messages, setMessages] = useState<ChatMessage[]>([
+  const { user } = useContext(AuthContext);
+  const [messages, setMessages] = useState<AssistantChatMessage[]>([
     {
       id: '1',
       content: "Hello! I'm your AI travel assistant. I can help you book tickets, find routes, track buses, and answer questions about public transport. Try saying something like 'Book a ticket from City Center to Airport' or 'When is the next bus to Downtown?'",
       isUser: false,
-      timestamp: new Date()
+      timestamp: new Date(),
+      type: 'text',
     }
   ]);
+  const [selectedBus, setSelectedBus] = useState<null | (FirestoreBus & { timings?: any[] })>(null);
+  const [selectedTiming, setSelectedTiming] = useState<any>(null);
+  const [selectedSeat, setSelectedSeat] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
@@ -114,15 +211,113 @@ const AssistantPage: React.FC = () => {
     }
   }, []);
 
+  // Handler for Book button (step 1)
+  const handleBookBus = (bus: FirestoreBus & { timings?: any[] }) => {
+    setSelectedBus(bus);
+    setSelectedTiming(null);
+    setSelectedSeat(null);
+  };
+  // Handler for timing selection (step 2)
+  const handleSelectTiming = (timing: any) => {
+    setSelectedTiming(timing);
+    setSelectedSeat(null);
+  };
+  // Handler for seat selection (step 3)
+  const handleSelectSeat = async (seat: string) => {
+    if (!user) {
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        content: "You must be signed in to book a seat. Please sign in or sign up.",
+        isUser: false,
+        timestamp: new Date(),
+        type: 'text',
+      }]);
+      return;
+    }
+    setSelectedSeat(seat);
+    if (!selectedBus || !selectedTiming) {
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        content: "Error: Bus or timing information is missing. Please try selecting the bus and timing again.",
+        isUser: false,
+        timestamp: new Date(),
+        type: 'text',
+      }]);
+      return;
+    }
+    
+    try {
+      // Check if timing has an ID, if not, create one
+      const timingId = selectedTiming.id || `timing_${Date.now()}`;
+      
+      // Update Firestore: add seat to takenSeats for this timing
+      const timingRef = doc(db, 'buses', selectedBus.id, 'timings', timingId);
+      
+      // First, try to get the current timing document to see if it exists
+      try {
+        await updateDoc(timingRef, {
+          takenSeats: arrayUnion(seat)
+        });
+      } catch (updateError) {
+        // If the document doesn't exist, create it with the seat
+        await setDoc(timingRef, {
+          time: selectedTiming.time,
+          availableSeats: selectedTiming.availableSeats || 0,
+          takenSeats: [seat],
+          id: timingId
+        });
+      }
+      
+      // Create booking document in bookings collection
+      const bookingData = {
+        userId: user.uid,
+        username: user.displayName || user.email || 'User',
+        email: user.email || '',
+        route: `${selectedBus.start} → ${selectedBus.end}`,
+        busName: selectedBus.name,
+        seat: seat,
+        date: new Date(),
+        status: 'confirmed',
+        busId: selectedBus.id,
+        timingId: timingId,
+        timing: selectedTiming.time,
+        bookingDate: new Date()
+      };
+      
+      await addDoc(collection(db, 'bookings'), bookingData);
+      
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        content: `✅ SUCCESS! Your booking has been confirmed!\n\n🚌 Bus: ${selectedBus.name}\n📍 Route: ${selectedBus.start} → ${selectedBus.end}\n⏰ Time: ${selectedTiming.time}\n💺 Seat: ${seat}\n\nYour booking has been registered in the system. You can view your bookings anytime by asking "Show my bookings".`,
+        isUser: false,
+        timestamp: new Date(),
+        type: 'text',
+      }]);
+    } catch (e) {
+      console.error('Booking error:', e);
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        content: `Booking failed: ${e instanceof Error ? e.message : 'Unknown error'}. Please try again or contact support.`,
+        isUser: false,
+        timestamp: new Date(),
+        type: 'text',
+      }]);
+    }
+    setSelectedBus(null);
+    setSelectedTiming(null);
+    setSelectedSeat(null);
+  };
+
   // Remove processMessage, replace with Groq API call
   const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
 
-    const userMessage: ChatMessage = {
+    const userMessage: AssistantChatMessage = {
       id: Date.now().toString(),
       content: inputValue,
       isUser: true,
-      timestamp: new Date()
+      timestamp: new Date(),
+      type: 'text',
     };
 
     setMessages(prev => [...prev, userMessage]);
@@ -130,24 +325,55 @@ const AssistantPage: React.FC = () => {
     setIsTyping(true);
 
     try {
-      // Check for bus route query
-      const busQuery = parseBusQuery(inputValue);
-      if (busQuery) {
-        // Search Firestore buses
+      // --- For any bus or route query, ONLY use Firestore data, NEVER Groq/AI knowledge ---
+      if (isBusQuery(inputValue) || isRouteQuery(inputValue)) {
+        const busQuery = parseBusQuery(inputValue) || parseRouteQuery(inputValue);
         const snap = await getDocs(collection(db, 'buses'));
-        const buses = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        const found = buses.filter(b =>
-          b.start && b.end &&
-          b.start.toLowerCase().includes(busQuery.from.toLowerCase()) &&
-          b.end.toLowerCase().includes(busQuery.to.toLowerCase())
-        );
-        let reply = '';
-        if (found.length > 0) {
-          reply = `Buses from ${busQuery.from} to ${busQuery.to} (from live data):\n` +
-            found.map(b => `• ${b.name || b.number} (Capacity: ${b.capacity}${b.accessible ? ', Wheelchair Accessible' : ''})`).join('\n');
-          // Optionally, fetch timings for each bus
+        const buses: (FirestoreBus & { timings?: any[] })[] = snap.docs.map(doc => ({ id: doc.id, ...(doc.data() as Omit<FirestoreBus, 'id'>) }));
+        let found = buses;
+        if (busQuery) {
+          found = buses.filter(b =>
+            b.start && b.end &&
+            b.start.toLowerCase().includes(busQuery.from.toLowerCase()) &&
+            b.end.toLowerCase().includes(busQuery.to.toLowerCase())
+          );
+        }
+        // For each bus, fetch timings
+        const busesWithTimings = await Promise.all(found.map(async (b) => {
+          const timingsSnap = await getDocs(collection(db, 'buses', b.id, 'timings'));
+          return { ...b, timings: timingsSnap.docs.map(t => t.data()) };
+        }));
+        if (busesWithTimings.length > 0) {
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(),
+            isUser: false,
+            timestamp: new Date(),
+            type: 'bus-cards',
+            buses: busesWithTimings,
+          }]);
         } else {
-          reply = `Sorry, no buses found from ${busQuery.from} to ${busQuery.to}.`;
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(),
+            content: 'No buses found in your database for this route.',
+            isUser: false,
+            timestamp: new Date(),
+            type: 'text',
+          }]);
+        }
+        setIsTyping(false);
+        return;
+      }
+      // Check for booking query
+      if (isBookingQuery(inputValue)) {
+        // Fetch all bookings from Firestore
+        const snap = await getDocs(collection(db, 'bookings'));
+        const bookings: FirestoreBooking[] = snap.docs.map(doc => ({ id: doc.id, ...(doc.data() as Omit<FirestoreBooking, 'id'>) }));
+        let reply = '';
+        if (bookings.length > 0) {
+          reply = 'All bookings (from live data):\n' +
+            bookings.map(b => `• ${b.username || b.email || 'User'}: ${b.route || '-'} | Bus: ${b.busName || '-'} | Seat: ${b.seat || '-'} | Date: ${b.date ? (typeof b.date === 'string' ? b.date : (b.date && typeof b.date === 'object' && 'seconds' in b.date ? new Date(b.date.seconds * 1000).toLocaleString() : '-')) : '-'} | Status: ${b.status || '-'}`).join('\n');
+        } else {
+          reply = 'No bookings found.';
         }
         setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), content: reply, isUser: false, timestamp: new Date() }]);
         setIsTyping(false);
@@ -159,7 +385,7 @@ const AssistantPage: React.FC = () => {
         { role: 'system', content: `You are an AI travel assistant. Respond in ${language}. Help users with public transport, bus tracking, booking, and schedules.` },
         ...messages.map(m => ({
           role: m.isUser ? 'user' : 'assistant',
-          content: m.content
+          content: m.content || ''
         })),
         { role: 'user', content: translatedInput }
       ];
@@ -169,7 +395,7 @@ const AssistantPage: React.FC = () => {
       if (language !== 'English') {
         finalContent = await translateText(aiContent, 'English', language);
       }
-      const aiResponse: ChatMessage = {
+      const aiResponse: AssistantChatMessage = {
         id: (Date.now() + 1).toString(),
         content: finalContent,
         isUser: false,
@@ -177,7 +403,7 @@ const AssistantPage: React.FC = () => {
       };
       setMessages(prev => [...prev, aiResponse]);
     } catch (err: any) {
-      const aiResponse: ChatMessage = {
+      const aiResponse: AssistantChatMessage = {
         id: (Date.now() + 1).toString(),
         content: err.message || 'Error contacting Groq API',
         isUser: false,
@@ -225,36 +451,85 @@ const AssistantPage: React.FC = () => {
 
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col h-[600px]">
           {/* Chat Messages */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-4" style={{ minHeight: 0 }}>
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
-              >
-                <div className={`flex max-w-xs lg:max-w-md space-x-3 ${message.isUser ? 'flex-row-reverse space-x-reverse' : ''}`}>
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${message.isUser ? 'bg-blue-600' : 'bg-gray-600'}`}>
-                    {message.isUser ? (
-                      <User className="h-4 w-4 text-white" />
-                    ) : (
-                      <Bot className="h-4 w-4 text-white" />
-                    )}
-                  </div>
-                  <div
-                    className={`px-4 py-2 rounded-lg ${
-                      message.isUser
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'
-                    }`}
-                  >
-                    <div className="text-sm whitespace-pre-line">{message.content}</div>
-                    <div className={`text-xs mt-1 ${message.isUser ? 'text-blue-100' : 'text-gray-500 dark:text-gray-400'}`}>
-                      {message.timestamp.toLocaleTimeString()}
-                    </div>
+          <div className="flex-1 overflow-y-auto px-2 py-4" style={{ maxHeight: '70vh' }}>
+            {messages.map((msg, idx) =>
+              msg.type === 'bus-cards' && msg.buses ? (
+                <div key={msg.id} className="mb-4">
+                  <div className="flex flex-col gap-4">
+                    {msg.buses.map((bus: FirestoreBus & { timings?: any[] }) => (
+                      <div key={bus.id} className="relative">
+                        <BusCard bus={{
+                          ...bus,
+                          number: bus.name,
+                          route: `${bus.start} → ${bus.end}`,
+                          status: 'on-time',
+                          currentLocation: { address: bus.start, lat: 0, lng: 0 },
+                          eta: 0,
+                          distance: 0,
+                          occupancy: 0,
+                          capacity: bus.capacity,
+                          destination: bus.end || '',
+                        }} />
+                        <button
+                          className="absolute top-4 right-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 shadow"
+                          onClick={() => handleBookBus(bus)}
+                        >
+                          Book
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 </div>
+              ) : (
+                <div key={msg.id} className={`flex ${msg.isUser ? 'justify-end' : 'justify-start'} mb-2`}>
+                  <div className={`max-w-[80%] px-4 py-3 rounded-lg shadow ${msg.isUser ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white'}`}>
+                    {msg.content}
+                  </div>
+                </div>
+              )
+            )}
+            {/* Stepper UI for booking flow */}
+            {selectedBus && !selectedTiming && (
+              <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 mt-4">
+                <h3 className="text-lg font-bold mb-2 text-gray-900 dark:text-white">Select a timing for {selectedBus.name}</h3>
+                <div className="flex flex-wrap gap-2">
+                  {selectedBus.timings && selectedBus.timings.length > 0 ? (
+                    selectedBus.timings.map((timing: any, idx: number) => (
+                      <button
+                        key={idx}
+                        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                        onClick={() => handleSelectTiming(timing)}
+                      >
+                        {timing.time} ({timing.availableSeats} seats)
+                      </button>
+                    ))
+                  ) : (
+                    <span className="text-gray-500 dark:text-gray-300">No timings available for this bus.</span>
+                  )}
+                </div>
               </div>
-            ))}
-
+            )}
+            {selectedBus && selectedTiming && !selectedSeat && (
+              <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 mt-4">
+                <h3 className="text-lg font-bold mb-2 text-gray-900 dark:text-white">Select a seat for {selectedBus.name} at {selectedTiming.time}</h3>
+                <div className="grid grid-cols-6 gap-2">
+                  {Array.from({ length: Number(selectedBus.capacity) || 40 }, (_, i) => {
+                    const seatNum = (i + 1).toString();
+                    const taken = Array.isArray(selectedTiming.takenSeats) ? selectedTiming.takenSeats.includes(seatNum) : false;
+                    return (
+                      <button
+                        key={seatNum}
+                        className={`px-3 py-2 rounded ${taken ? 'bg-gray-400 text-white cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                        onClick={() => !taken && handleSelectSeat(seatNum)}
+                        disabled={taken}
+                      >
+                        {seatNum}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {isTyping && (
               <div className="flex justify-start">
                 <div className="flex space-x-3">
