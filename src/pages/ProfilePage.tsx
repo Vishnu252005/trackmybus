@@ -1307,7 +1307,7 @@ const ProfilePage: React.FC = () => {
                     ) : (
                       <button onClick={handleSendVerification} disabled={sendingVerification} className="ml-2 text-yellow-600 flex items-center hover:underline">
                         <XCircle className="h-4 w-4 mr-1" />Verify Email{sendingVerification && <RefreshCw className="h-4 w-4 animate-spin ml-1" />}
-                      </button>
+        </button>
                     )}
                   </div>
                   <div className="flex items-center gap-2 text-gray-700 dark:text-gray-200">
@@ -1404,9 +1404,9 @@ const ProfilePage: React.FC = () => {
                   userBookings.map(b => (
                     <div key={b.id} className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-shadow">
                       <div className="flex flex-col md:flex-row md:items-center gap-4">
-                        <div className="flex-1">
+                      <div className="flex-1">
                           <div className="flex items-center gap-2 mb-2">
-                            <div className="font-semibold text-lg text-gray-900 dark:text-white">{b.route}</div>
+                        <div className="font-semibold text-lg text-gray-900 dark:text-white">{b.route}</div>
                             <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
                               b.status === 'confirmed' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
                               b.status === 'upcoming' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' :
@@ -1415,7 +1415,7 @@ const ProfilePage: React.FC = () => {
                             }`}>
                               {b.status ? b.status.charAt(0).toUpperCase() + b.status.slice(1) : 'Pending'}
                             </span>
-                          </div>
+                      </div>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-600 dark:text-gray-300">
                             <div><span className="font-medium">Date:</span> {b.date ? (typeof b.date === 'string' ? new Date(b.date).toLocaleString() : (b.date.seconds ? new Date(b.date.seconds * 1000).toLocaleString() : '-')) : '-'}</div>
                             <div><span className="font-medium">Bus:</span> {b.busName || '-'}</div>

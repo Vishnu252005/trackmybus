@@ -331,9 +331,9 @@ const AssistantPage: React.FC = () => {
       const timingRef = doc(db, 'buses', selectedBus.id, 'timings', timingId);
       
       // First, try to get the current timing document to see if it exists
-      try {
-        await updateDoc(timingRef, {
-          takenSeats: arrayUnion(seat)
+    try {
+      await updateDoc(timingRef, {
+        takenSeats: arrayUnion(seat)
         });
       } catch (updateError) {
         // If the document doesn't exist, create it with the seat
@@ -577,7 +577,7 @@ const AssistantPage: React.FC = () => {
                       const occupancyPercentage = (realTimeOccupancy / bus.capacity) * 100;
                       
                       return (
-                        <div key={bus.id} className="relative">
+                      <div key={bus.id} className="relative">
                           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow border border-gray-200 dark:border-gray-700">
                             <div className="p-6">
                               <div className="flex justify-between items-start mb-4">
@@ -635,22 +635,17 @@ const AssistantPage: React.FC = () => {
                               </div>
                             </div>
                           </div>
-                          <button
-                            className="absolute top-4 right-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 shadow font-medium"
-                            onClick={() => handleBookBus(bus)}
-                          >
-                            🎫 Book Now
-                          </button>
-                        </div>
-                                              );
-                      })}
-                    </div>
-                    <div className="mt-4 text-center">
-                      <p className="text-sm text-gray-600 dark:text-gray-400">
-                        💡 Click "🎫 Book Now" on any bus to see available seats and make your booking!
-                      </p>
-                    </div>
+                        <button
+                          className="absolute top-4 right-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 shadow"
+                          onClick={() => handleBookBus(bus)}
+                        >
+                          Book
+                        </button>
+                      </div>
+                      );
+                    })}
                   </div>
+                </div>
               ) : (
                 <div key={msg.id} className={`flex ${msg.isUser ? 'justify-end' : 'justify-start'} mb-2`}>
                   <div className={`max-w-[80%] px-4 py-3 rounded-lg shadow ${msg.isUser ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white'}`}>
