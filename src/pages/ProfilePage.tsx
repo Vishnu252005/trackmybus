@@ -7,6 +7,8 @@ import { db } from '../firebase/config';
 import { collection, getDocs, addDoc, doc, setDoc, updateDoc, deleteDoc, serverTimestamp, query, where, getDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, sendEmailVerification, sendPasswordResetEmail } from 'firebase/auth';
 import AssistantPage from './AssistantPage';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
 const getInitials = (name: string) => {
   return name
@@ -227,10 +229,44 @@ const ProfilePage: React.FC = () => {
       setSignUpUsername('');
       setSignUpEmail('');
       setSignUpPassword('');
+      setToast({ type: 'success', message: 'Account created successfully!' });
     } catch (err: any) {
       setError(getFriendlyFirebaseError(err));
+      setToast({ type: 'error', message: getFriendlyFirebaseError(err) });
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Create test user for debugging
+  const createTestUser = async () => {
+    try {
+      const testEmail = 'test@example.com';
+      const testPassword = 'test123456';
+      const testUsername = 'TestUser';
+      
+      console.log('Creating test user...');
+      const cred = await createUserWithEmailAndPassword(auth, testEmail, testPassword);
+      await updateProfile(cred.user, { displayName: testUsername });
+      await setDoc(doc(db, 'users', cred.user.uid), {
+        username: testUsername,
+        email: testEmail,
+        createdAt: serverTimestamp(),
+        photoURL: '',
+      });
+      
+      setSignInEmail(testEmail);
+      setSignInPassword(testPassword);
+      setToast({ type: 'success', message: 'Test user created! You can now sign in with test@example.com / test123456' });
+    } catch (err: any) {
+      console.error('Error creating test user:', err);
+      if (err.code === 'auth/email-already-in-use') {
+        setSignInEmail('test@example.com');
+        setSignInPassword('test123456');
+        setToast({ type: 'success', message: 'Test user already exists! Use test@example.com / test123456 to sign in' });
+      } else {
+        setToast({ type: 'error', message: getFriendlyFirebaseError(err) });
+      }
     }
   };
 
@@ -238,13 +274,21 @@ const ProfilePage: React.FC = () => {
     e.preventDefault();
     setError('');
     setLoading(true);
+    
+    console.log('Attempting sign in with:', { email: signInEmail, password: signInPassword ? '***' : 'empty' });
+    
     try {
       const cred = await signInWithEmailAndPassword(auth, signInEmail, signInPassword);
+      console.log('Sign in successful:', cred.user.email);
       signIn(cred.user);
       setSignInEmail('');
       setSignInPassword('');
+      setToast({ type: 'success', message: 'Successfully signed in!' });
     } catch (err: any) {
-      setError(getFriendlyFirebaseError(err));
+      console.error('Sign in error:', err);
+      const errorMessage = getFriendlyFirebaseError(err);
+      setError(errorMessage);
+      setToast({ type: 'error', message: errorMessage });
     } finally {
       setLoading(false);
     }
@@ -362,6 +406,122 @@ const ProfilePage: React.FC = () => {
       })
       .catch(() => setUserBookingsLoading(false));
   }, [user]);
+
+  // Generate PDF ticket
+  const generateTicketPDF = async (booking: any) => {
+    try {
+      // Create a temporary div for the ticket
+      const ticketDiv = document.createElement('div');
+      ticketDiv.style.width = '800px';
+      ticketDiv.style.padding = '40px';
+      ticketDiv.style.backgroundColor = 'white';
+      ticketDiv.style.fontFamily = 'Arial, sans-serif';
+      ticketDiv.style.position = 'absolute';
+      ticketDiv.style.left = '-9999px';
+      ticketDiv.innerHTML = `
+        <div style="border: 3px solid #1f2937; border-radius: 15px; padding: 30px; background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);">
+          <!-- Header -->
+          <div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #1f2937; padding-bottom: 20px;">
+            <div style="font-size: 32px; font-weight: bold; color: #1f2937; margin-bottom: 10px;">🚌 Track My Bus</div>
+            <div style="font-size: 18px; color: #6b7280; font-weight: 600;">ELECTRONIC TICKET</div>
+          </div>
+          
+          <!-- Ticket Details -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px;">
+            <div>
+              <div style="font-size: 14px; color: #6b7280; margin-bottom: 5px;">PASSENGER NAME</div>
+              <div style="font-size: 20px; font-weight: bold; color: #1f2937; margin-bottom: 20px;">${booking.username || 'N/A'}</div>
+              
+              <div style="font-size: 14px; color: #6b7280; margin-bottom: 5px;">EMAIL</div>
+              <div style="font-size: 16px; color: #1f2937; margin-bottom: 20px;">${booking.email || 'N/A'}</div>
+              
+              <div style="font-size: 14px; color: #6b7280; margin-bottom: 5px;">BOOKING DATE</div>
+              <div style="font-size: 16px; color: #1f2937; margin-bottom: 20px;">${booking.bookingDate ? new Date(booking.bookingDate.seconds ? booking.bookingDate.seconds * 1000 : booking.bookingDate).toLocaleDateString() : 'N/A'}</div>
+            </div>
+            
+            <div>
+              <div style="font-size: 14px; color: #6b7280; margin-bottom: 5px;">TICKET STATUS</div>
+              <div style="font-size: 18px; font-weight: bold; color: #059669; margin-bottom: 20px; text-transform: uppercase;">${booking.status || 'CONFIRMED'}</div>
+              
+              <div style="font-size: 14px; color: #6b7280; margin-bottom: 5px;">TICKET ID</div>
+              <div style="font-size: 16px; font-family: monospace; color: #1f2937; margin-bottom: 20px;">${booking.id}</div>
+            </div>
+          </div>
+          
+          <!-- Journey Details -->
+          <div style="background: #1f2937; color: white; padding: 25px; border-radius: 10px; margin-bottom: 30px;">
+            <div style="font-size: 20px; font-weight: bold; margin-bottom: 20px; text-align: center;">JOURNEY DETAILS</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+              <div>
+                <div style="font-size: 14px; color: #9ca3af; margin-bottom: 5px;">ROUTE</div>
+                <div style="font-size: 18px; font-weight: bold;">${booking.route || 'N/A'}</div>
+              </div>
+              <div>
+                <div style="font-size: 14px; color: #9ca3af; margin-bottom: 5px;">BUS</div>
+                <div style="font-size: 18px; font-weight: bold;">${booking.busName || 'N/A'}</div>
+              </div>
+              <div>
+                <div style="font-size: 14px; color: #9ca3af; margin-bottom: 5px;">SEAT NUMBER</div>
+                <div style="font-size: 18px; font-weight: bold;">${booking.seat || 'N/A'}</div>
+              </div>
+              <div>
+                <div style="font-size: 14px; color: #9ca3af; margin-bottom: 5px;">DEPARTURE TIME</div>
+                <div style="font-size: 18px; font-weight: bold;">${booking.timing || 'N/A'}</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Travel Date -->
+          <div style="text-align: center; margin-bottom: 30px;">
+            <div style="font-size: 14px; color: #6b7280; margin-bottom: 5px;">TRAVEL DATE</div>
+            <div style="font-size: 24px; font-weight: bold; color: #1f2937;">${booking.date ? new Date(booking.date.seconds ? booking.date.seconds * 1000 : booking.date).toLocaleDateString() : 'N/A'}</div>
+          </div>
+          
+          <!-- Footer -->
+          <div style="text-align: center; border-top: 2px solid #1f2937; padding-top: 20px;">
+            <div style="font-size: 12px; color: #6b7280; margin-bottom: 10px;">This is an electronic ticket. Please present this ticket to the bus conductor.</div>
+            <div style="font-size: 12px; color: #6b7280;">Generated on ${new Date().toLocaleString()}</div>
+          </div>
+        </div>
+      `;
+      
+      document.body.appendChild(ticketDiv);
+      
+      // Convert to canvas
+      const canvas = await html2canvas(ticketDiv, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff'
+      });
+      
+      // Remove the temporary div
+      document.body.removeChild(ticketDiv);
+      
+      // Create PDF
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = pdfWidth - 20;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      
+      // Center the image
+      const x = 10;
+      const y = (pdfHeight - imgHeight) / 2;
+      
+      pdf.addImage(imgData, 'PNG', x, y, imgWidth, imgHeight);
+      
+      // Download the PDF
+      const fileName = `ticket_${booking.id}_${new Date().toISOString().split('T')[0]}.pdf`;
+      pdf.save(fileName);
+      
+      setToast({ type: 'success', message: 'Ticket downloaded successfully!' });
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      setToast({ type: 'error', message: 'Failed to generate ticket. Please try again.' });
+    }
+  };
 
   if (user) {
     if (role === null) {
@@ -1134,23 +1294,107 @@ const ProfilePage: React.FC = () => {
           {dashboardTab === 'bookings' && (
             <div>
               <h2 className="text-2xl font-bold mb-6 flex items-center gap-2"><Activity className="h-6 w-6 text-blue-500" />My Bookings</h2>
+              
+              {/* Booking Stats */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div className="bg-blue-100 dark:bg-blue-900 p-4 rounded-lg">
+                  <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{userBookings.length}</div>
+                  <div className="text-sm text-blue-600 dark:text-blue-400">Total Bookings</div>
+                </div>
+                <div className="bg-green-100 dark:bg-green-900 p-4 rounded-lg">
+                  <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                    {userBookings.filter(b => b.status === 'confirmed').length}
+                  </div>
+                  <div className="text-sm text-green-600 dark:text-green-400">Confirmed</div>
+                </div>
+                <div className="bg-yellow-100 dark:bg-yellow-900 p-4 rounded-lg">
+                  <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
+                    {userBookings.filter(b => b.status === 'upcoming').length}
+                  </div>
+                  <div className="text-sm text-yellow-600 dark:text-yellow-400">Upcoming</div>
+                </div>
+                <div className="bg-red-100 dark:bg-red-900 p-4 rounded-lg">
+                  <div className="text-2xl font-bold text-red-600 dark:text-red-400">
+                    {userBookings.filter(b => b.status === 'cancelled').length}
+                  </div>
+                  <div className="text-sm text-red-600 dark:text-red-400">Cancelled</div>
+                </div>
+              </div>
+
               <div className="grid gap-4">
                 {userBookingsLoading ? (
-                  <div className="text-gray-500 dark:text-gray-400">Loading bookings...</div>
+                  <div className="text-gray-500 dark:text-gray-400 flex items-center justify-center py-8">
+                    <RefreshCw className="h-6 w-6 animate-spin mr-2" />
+                    Loading bookings...
+                  </div>
                 ) : userBookings.length === 0 ? (
-                  <div className="text-gray-500 dark:text-gray-400">No bookings found.</div>
+                  <div className="text-center py-12">
+                    <Activity className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                    <div className="text-gray-500 dark:text-gray-400 text-lg mb-2">No bookings found</div>
+                    <div className="text-gray-400 dark:text-gray-500 text-sm">Book a ticket to see your bookings here</div>
+                  </div>
                 ) : (
                   userBookings.map(b => (
-                    <div key={b.id} className="bg-gray-100 dark:bg-gray-700 rounded-lg p-4 flex flex-col md:flex-row md:items-center gap-4 shadow">
-                      <div className="flex-1">
-                        <div className="font-semibold text-lg text-gray-900 dark:text-white">{b.route}</div>
-                        <div className="text-gray-600 dark:text-gray-300">Date: {b.date ? (typeof b.date === 'string' ? new Date(b.date).toLocaleString() : (b.date.seconds ? new Date(b.date.seconds * 1000).toLocaleString() : '-')) : '-'}</div>
-                        <div className="text-gray-600 dark:text-gray-300">Bus: {b.busName} | Seat: {b.seat}</div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${b.status === 'upcoming' ? 'bg-blue-200 text-blue-800' : b.status === 'completed' ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}`}>{b.status ? b.status.charAt(0).toUpperCase() + b.status.slice(1) : '-'}</span>
-                        {b.status === 'upcoming' && <button className="ml-2 px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-xs">Cancel</button>}
-                        {b.status === 'completed' && <button className="ml-2 px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs">View Ticket</button>}
+                    <div key={b.id} className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-shadow">
+                      <div className="flex flex-col md:flex-row md:items-center gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="font-semibold text-lg text-gray-900 dark:text-white">{b.route}</div>
+                            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                              b.status === 'confirmed' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+                              b.status === 'upcoming' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' :
+                              b.status === 'cancelled' ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' :
+                              'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
+                            }`}>
+                              {b.status ? b.status.charAt(0).toUpperCase() + b.status.slice(1) : 'Pending'}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-600 dark:text-gray-300">
+                            <div><span className="font-medium">Date:</span> {b.date ? (typeof b.date === 'string' ? new Date(b.date).toLocaleString() : (b.date.seconds ? new Date(b.date.seconds * 1000).toLocaleString() : '-')) : '-'}</div>
+                            <div><span className="font-medium">Bus:</span> {b.busName || '-'}</div>
+                            <div><span className="font-medium">Seat:</span> <span className="font-mono bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">{b.seat || '-'}</span></div>
+                            <div><span className="font-medium">Timing:</span> {b.timing || '-'}</div>
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          {b.status === 'upcoming' && (
+                            <button 
+                              onClick={async () => {
+                                if (window.confirm('Are you sure you want to cancel this booking?')) {
+                                  try {
+                                    await updateDoc(doc(db, 'bookings', b.id), {
+                                      status: 'cancelled'
+                                    });
+                                    setToast({ type: 'success', message: 'Booking cancelled successfully!' });
+                                    // Refresh user bookings
+                                    const q = query(collection(db, 'bookings'), where('userId', '==', user.uid));
+                                    const snap = await getDocs(q);
+                                    const updatedBookings = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                                    setUserBookings(updatedBookings);
+                                  } catch (error) {
+                                    setToast({ type: 'error', message: 'Failed to cancel booking. Please try again.' });
+                                  }
+                                }
+                              }}
+                              className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 text-sm font-medium"
+                            >
+                              Cancel Booking
+                            </button>
+                          )}
+                          {b.status === 'confirmed' && (
+                            <button 
+                              onClick={() => generateTicketPDF(b)}
+                              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium"
+                            >
+                              View Ticket
+                            </button>
+                          )}
+                          {b.status === 'cancelled' && (
+                            <span className="px-4 py-2 bg-gray-300 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded text-sm font-medium">
+                              Cancelled
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))
@@ -1211,6 +1455,15 @@ const ProfilePage: React.FC = () => {
             disabled={loading}
           >
             {loading ? 'Signing In...' : 'Sign In'}
+          </button>
+          
+          {/* Debug button for testing */}
+          <button
+            type="button"
+            onClick={createTestUser}
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm"
+          >
+            Create Test User
           </button>
         </form>
       ) : (
