@@ -489,7 +489,7 @@ const AssistantPage: React.FC = () => {
   };
   const [selectedBus, setSelectedBus] = useState<null | (FirestoreBus & { timings?: any[] })>(null);
   const [selectedTiming, setSelectedTiming] = useState<any>(null);
-  const [selectedSeat, setSelectedSeat] = useState<string | null>(null);
+  const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
@@ -539,7 +539,7 @@ const AssistantPage: React.FC = () => {
   const handleBookBus = (bus: FirestoreBus & { timings?: any[] }) => {
     setSelectedBus(bus);
     setSelectedTiming(null);
-    setSelectedSeat(null);
+    setSelectedSeats([]);
   };
   // Function to fetch booked seats for a specific bus and timing
   const fetchBookedSeats = async (busId: string, timingId: string) => {
@@ -577,7 +577,7 @@ const AssistantPage: React.FC = () => {
   // Handler for timing selection (step 2)
   const handleSelectTiming = async (timing: any) => {
     setSelectedTiming(timing);
-    setSelectedSeat(null);
+    setSelectedSeats([]);
     // Fetch booked seats when timing is selected
     if (selectedBus) {
       const timingId = `timing_${timing.time.replace(/:/g, '_')}`;
@@ -585,7 +585,7 @@ const AssistantPage: React.FC = () => {
     }
   };
   // Handler for seat selection (step 3)
-  const handleSelectSeat = async (seat: string) => {
+  const handleSelectSeat = (seat: string) => {
     if (!user) {
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
@@ -596,11 +596,34 @@ const AssistantPage: React.FC = () => {
       }]);
       return;
     }
-    setSelectedSeat(seat);
-    if (!selectedBus || !selectedTiming) {
+    
+    // Toggle seat selection
+    setSelectedSeats(prev => {
+      if (prev.includes(seat)) {
+        return prev.filter(s => s !== seat);
+      } else {
+        return [...prev, seat];
+      }
+    });
+  };
+  
+  // Handler for proceeding with booking (step 4)
+  const handleProceedWithBooking = async () => {
+    if (!user) {
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
-        content: "Error: Bus or timing information is missing. Please try selecting the bus and timing again.",
+        content: "You must be signed in to book seats. Please sign in or sign up.",
+        isUser: false,
+        timestamp: new Date(),
+        type: 'text',
+      }]);
+      return;
+    }
+    
+    if (!selectedBus || !selectedTiming || selectedSeats.length === 0) {
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        content: "Error: Please select at least one seat before proceeding.",
         isUser: false,
         timestamp: new Date(),
         type: 'text',
@@ -613,61 +636,50 @@ const AssistantPage: React.FC = () => {
       const userDoc = await getDoc(doc(db, 'users', user.uid));
       const userData = userDoc.data();
       const currentCredits = userData?.credits || 0;
-      const creditReward = 10; // Credits to add when booking a ticket
+      const creditReward = 10; // Credits to add per seat
+      const totalCreditsEarned = creditReward * selectedSeats.length;
       
       // Create a consistent timing ID based on the time
       const timingId = `timing_${selectedTiming.time.replace(/:/g, '_')}`;
       
-      // Update Firestore: add seat to takenSeats for this timing
-      const timingRef = doc(db, 'buses', selectedBus.id, 'timings', timingId);
+      // Book all selected seats
+      const bookingPromises = selectedSeats.map(async (seat) => {
+        // Create booking document in bookings collection
+        const bookingData = {
+          userId: user.uid,
+          username: user.displayName || user.email || 'User',
+          email: user.email || '',
+          route: `${selectedBus.start} → ${selectedBus.end}`,
+          busName: selectedBus.name,
+          seat: seat,
+          date: new Date(),
+          status: 'confirmed',
+          busId: selectedBus.id,
+          timingId: timingId,
+          timing: selectedTiming.time,
+          bookingDate: new Date(),
+          creditsEarned: creditReward
+        };
+        
+        return addDoc(collection(db, 'bookings'), bookingData);
+      });
       
-      // First, try to get the current timing document to see if it exists
-    try {
-      await updateDoc(timingRef, {
-        takenSeats: arrayUnion(seat)
-        });
-      } catch (updateError) {
-        // If the document doesn't exist, create it with the seat
-        await setDoc(timingRef, {
-          time: selectedTiming.time,
-          availableSeats: selectedTiming.availableSeats || 0,
-          takenSeats: [seat],
-          id: timingId
-        });
-      }
-      
-      // Create booking document in bookings collection
-      const bookingData = {
-        userId: user.uid,
-        username: user.displayName || user.email || 'User',
-        email: user.email || '',
-        route: `${selectedBus.start} → ${selectedBus.end}`,
-        busName: selectedBus.name,
-        seat: seat,
-        date: new Date(),
-        status: 'confirmed',
-        busId: selectedBus.id,
-        timingId: timingId,
-        timing: selectedTiming.time,
-        bookingDate: new Date(),
-        creditsEarned: creditReward
-      };
-      
-      await addDoc(collection(db, 'bookings'), bookingData);
+      // Wait for all bookings to be created
+      await Promise.all(bookingPromises);
       
       // Add credits to user account as reward for booking
-      const newCredits = currentCredits + creditReward;
+      const newCredits = currentCredits + totalCreditsEarned;
       await updateDoc(doc(db, 'users', user.uid), {
         credits: newCredits
       });
       
       // Refresh booked seats after successful booking
-      console.log('Refreshing booked seats after booking seat:', seat);
+      console.log('Refreshing booked seats after booking seats:', selectedSeats);
       await fetchBookedSeats(selectedBus.id, timingId);
       
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
-        content: `✅ SUCCESS! Your booking has been confirmed!\n\n🚌 Bus: ${selectedBus.name}\n📍 Route: ${selectedBus.start} → ${selectedBus.end}\n⏰ Time: ${selectedTiming.time}\n💺 Seat: ${seat}\n💰 Credits Earned: +${creditReward}\n💰 Total Credits: ${newCredits}\n\nYour booking has been registered in the system. You can view your bookings anytime by asking "Show my bookings".`,
+        content: `✅ SUCCESS! Your bookings have been confirmed!\n\n🚌 Bus: ${selectedBus.name}\n📍 Route: ${selectedBus.start} → ${selectedBus.end}\n⏰ Time: ${selectedTiming.time}\n💺 Seats: ${selectedSeats.join(', ')}\n💰 Credits Earned: +${totalCreditsEarned}\n💰 Total Credits: ${newCredits}\n\nYour bookings have been registered in the system. You can view your bookings anytime by asking "Show my bookings".`,
         isUser: false,
         timestamp: new Date(),
         type: 'text',
@@ -682,9 +694,11 @@ const AssistantPage: React.FC = () => {
         type: 'text',
       }]);
     }
+    
+    // Reset selection
     setSelectedBus(null);
     setSelectedTiming(null);
-    setSelectedSeat(null);
+    setSelectedSeats([]);
   };
 
   // Remove processMessage, replace with Groq API call
@@ -1194,9 +1208,16 @@ const AssistantPage: React.FC = () => {
                 </div>
               </div>
             )}
-            {selectedBus && selectedTiming && !selectedSeat && (
+            {selectedBus && selectedTiming && (
               <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 mt-4">
-                <h3 className="text-lg font-bold mb-2 text-gray-900 dark:text-white">Select a seat for {selectedBus.name} at {selectedTiming.time}</h3>
+                <h3 className="text-lg font-bold mb-2 text-gray-900 dark:text-white">
+                  Select seats for {selectedBus.name} at {selectedTiming.time}
+                  {selectedSeats.length > 0 && (
+                    <span className="text-sm font-normal text-blue-600 dark:text-blue-400 ml-2">
+                      ({selectedSeats.length} selected: {selectedSeats.join(', ')})
+                    </span>
+                  )}
+                </h3>
                 
                 {/* Debug Info */}
                 <div className="mb-2 text-xs text-gray-500">
@@ -1234,12 +1255,16 @@ const AssistantPage: React.FC = () => {
                       console.log(`Seat ${seatNum} is booked`);
                     }
                     
+                    const isSelected = selectedSeats.includes(seatNum);
+                    
                     return (
                       <button
                         key={seatNum}
                         className={`px-3 py-2 rounded font-medium relative ${
                           taken 
                             ? 'bg-red-500 text-white cursor-not-allowed hover:bg-red-600' 
+                            : isSelected
+                            ? 'bg-green-500 text-white hover:bg-green-600 border-2 border-green-300'
                             : isWheelchairSeat
                             ? 'bg-purple-500 text-white hover:bg-purple-600 border-2 border-yellow-400'
                             : 'bg-blue-500 text-white hover:bg-blue-600'
@@ -1249,13 +1274,18 @@ const AssistantPage: React.FC = () => {
                         title={
                           taken 
                             ? `Seat ${seatNum} - Booked` 
+                            : isSelected
+                            ? `Seat ${seatNum} - Selected (click to deselect)`
                             : isWheelchairSeat 
                             ? `Seat ${seatNum} - Wheelchair Accessible` 
                             : `Seat ${seatNum} - Available`
                         }
                       >
                         {seatNum}
-                        {isWheelchairSeat && !taken && (
+                        {isSelected && (
+                          <span className="absolute -top-1 -right-1 text-xs">✓</span>
+                        )}
+                        {isWheelchairSeat && !taken && !isSelected && (
                           <span className="absolute -top-1 -right-1 text-xs">♿</span>
                         )}
                         {isWheelchairSeat && taken && (
@@ -1266,19 +1296,28 @@ const AssistantPage: React.FC = () => {
                   })}
                 </div>
                 
-                {/* Cancel Button */}
-                <div className="mt-4 flex justify-center">
+                {/* Action Buttons */}
+                <div className="mt-4 flex justify-center gap-4">
                   <button
                     onClick={() => {
                       setSelectedBus(null);
                       setSelectedTiming(null);
-                      setSelectedSeat(null);
+                      setSelectedSeats([]);
                       setBookedSeats([]);
                     }}
                     className="px-6 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 font-medium"
                   >
                     Cancel Booking
                   </button>
+                  
+                  {selectedSeats.length > 0 && (
+                    <button
+                      onClick={handleProceedWithBooking}
+                      className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-medium"
+                    >
+                      Proceed with {selectedSeats.length} seat{selectedSeats.length > 1 ? 's' : ''}
+                    </button>
+                  )}
                 </div>
               </div>
             )}
