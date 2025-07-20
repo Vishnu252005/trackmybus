@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useContext } from 'react';
-import { Send, Mic, MicOff, Bot, User, MapPin, Users } from 'lucide-react';
-import { collection, getDocs, doc, updateDoc, arrayUnion, addDoc, setDoc, getDoc, query, where } from 'firebase/firestore';
+import { Send, Mic, MicOff, Bot, User, MapPin, Users, Clock } from 'lucide-react';
+import { collection, getDocs, doc, updateDoc, arrayUnion, arrayRemove, addDoc, setDoc, getDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import BusCard from '../components/BusCard';
 import { AuthContext } from '../App';
@@ -74,6 +74,33 @@ function parseBusQuery(text: string) {
 function isBookingQuery(text: string) {
   // e.g. 'show bookings', 'list all bookings', 'booking for ...'
   return /\b(bookings?|list bookings|show bookings|booking for)\b/i.test(text);
+}
+
+// Helper to check if user is asking for their own bookings
+function isMyBookingsQuery(text: string) {
+  // e.g. 'my bookings', 'show my bookings', 'my tickets', 'my reservations'
+  return /\b(my|my own|my personal)\b.*\b(bookings?|tickets?|reservations?)\b/i.test(text);
+}
+
+// Helper to check if user is asking to cancel bookings
+function isCancelBookingQuery(text: string) {
+  // e.g. 'cancel booking', 'cancel my booking', 'cancel ticket', 'cancel seat'
+  return /\b(cancel|delete|remove)\b.*\b(bookings?|tickets?|seats?)\b/i.test(text);
+}
+
+// Helper to extract booking ID from cancellation query
+function parseCancelBookingQuery(text: string) {
+  // Try to extract booking ID or seat number
+  const bookingIdMatch = text.match(/\b(?:booking|ticket|seat)\s*(?:#|number|id)?\s*(\w+)/i);
+  const seatMatch = text.match(/\bseat\s*(\w+)/i);
+  
+  if (bookingIdMatch) {
+    return { type: 'bookingId', value: bookingIdMatch[1] };
+  } else if (seatMatch) {
+    return { type: 'seat', value: seatMatch[1] };
+  }
+  
+  return null;
 }
 
 // Helper: strict bus query detection (tool-only pattern)
@@ -186,14 +213,15 @@ type FirestoreBus = {
   accessible?: boolean;
 };
 
-// Local type for assistant chat messages supporting bus-cards
+// Local type for assistant chat messages supporting bus-cards and booking-cards
 export type AssistantChatMessage = {
   id: string;
   content?: string;
   isUser: boolean;
   timestamp: Date;
-  type?: 'text' | 'bus-cards';
+  type?: 'text' | 'bus-cards' | 'booking-cards';
   buses?: (FirestoreBus & { timings?: any[] })[];
+  bookings?: FirestoreBooking[];
 };
 
 // Tool: fetch buses from Firestore (tool-only, never AI)
@@ -296,7 +324,77 @@ type FirestoreBooking = {
   seat?: string;
   date?: string | { seconds: number };
   status?: string;
+  userId?: string;
+  busId?: string;
+  timingId?: string;
+  creditsEarned?: number;
 };
+
+// Function to cancel a booking
+async function cancelBooking(bookingId: string, userId: string): Promise<{ success: boolean; message: string; creditsRemoved?: number }> {
+  try {
+    console.log('Attempting to cancel booking:', bookingId, 'for user:', userId);
+    
+    // Get the booking document
+    const bookingRef = doc(db, 'bookings', bookingId);
+    const bookingDoc = await getDoc(bookingRef);
+    
+    if (!bookingDoc.exists()) {
+      return { success: false, message: 'Booking not found.' };
+    }
+    
+    const bookingData = bookingDoc.data() as FirestoreBooking;
+    console.log('Booking data:', bookingData);
+    
+    // Check if user owns this booking
+    if (bookingData.userId !== userId) {
+      return { success: false, message: 'You can only cancel your own bookings.' };
+    }
+    
+    // Check if booking is already cancelled
+    if (bookingData.status === 'cancelled') {
+      return { success: false, message: 'This booking is already cancelled.' };
+    }
+    
+    // Update booking status to cancelled (same as ProfilePage)
+    await updateDoc(bookingRef, {
+      status: 'cancelled',
+      cancelledAt: new Date()
+    });
+    console.log('Updated booking status to cancelled');
+    
+    // Remove credits earned from this booking (same as ProfilePage)
+    const creditsToRemove = bookingData.creditsEarned || 10; // Use creditsEarned from booking or default to 10
+    console.log('Credits to remove:', creditsToRemove);
+    
+    if (creditsToRemove > 0) {
+      const userRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userRef);
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        const currentCredits = userData?.credits || 0;
+        const newCredits = Math.max(0, currentCredits - creditsToRemove);
+        
+        console.log('Updating user credits:', currentCredits, '->', newCredits);
+        
+        await updateDoc(userRef, {
+          credits: newCredits
+        });
+        console.log('Removed credits from user');
+      }
+    }
+    
+    return { 
+      success: true, 
+      message: `Booking cancelled successfully! ${creditsToRemove > 0 ? `${creditsToRemove} credits removed.` : ''}`,
+      creditsRemoved: creditsToRemove
+    };
+    
+  } catch (error) {
+    console.error('Error cancelling booking:', error);
+    return { success: false, message: `Failed to cancel booking: ${error instanceof Error ? error.message : 'Unknown error'}` };
+  }
+}
 
 const AssistantPage: React.FC = () => {
   const { user } = useContext(AuthContext);
@@ -309,6 +407,86 @@ const AssistantPage: React.FC = () => {
       type: 'text',
     }
   ]);
+  
+  // Function to handle booking cancellation from AI Assistant
+  const handleCancelBookingFromAI = async (bookingId: string) => {
+    if (!user) {
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        content: "You must be signed in to cancel bookings.",
+        isUser: false,
+        timestamp: new Date(),
+        type: 'text',
+      }]);
+      return;
+    }
+    
+    try {
+      console.log('Cancelling booking:', bookingId);
+      const result = await cancelBooking(bookingId, user.uid);
+      
+      // Add the cancellation result message
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        content: result.message,
+        isUser: false,
+        timestamp: new Date(),
+        type: 'text',
+      }]);
+      
+      // Find and update the booking cards message
+      setMessages(prev => {
+        const updatedMessages = [...prev];
+        const bookingCardsIndex = updatedMessages.findIndex(msg => 
+          msg.type === 'booking-cards' && msg.bookings
+        );
+        
+        console.log('Found booking cards message at index:', bookingCardsIndex);
+        
+        if (bookingCardsIndex !== -1) {
+          const bookingCardsMessage = updatedMessages[bookingCardsIndex];
+          const updatedBookings = bookingCardsMessage.bookings?.filter(b => b.id !== bookingId) || [];
+          
+          console.log('Original bookings:', bookingCardsMessage.bookings?.length);
+          console.log('Updated bookings:', updatedBookings.length);
+          
+          if (updatedBookings.length > 0) {
+            // Update the existing booking cards message
+            updatedMessages[bookingCardsIndex] = {
+              ...bookingCardsMessage,
+              bookings: updatedBookings,
+            };
+            console.log('Updated booking cards message');
+          } else {
+            // Remove the booking cards message and replace with "no bookings" message
+            updatedMessages.splice(bookingCardsIndex, 1);
+            updatedMessages.push({
+              id: Date.now().toString(),
+              content: "You don't have any active bookings.",
+              isUser: false,
+              timestamp: new Date(),
+              type: 'text',
+            });
+            console.log('Replaced with no bookings message');
+          }
+        } else {
+          console.log('No booking cards message found');
+        }
+        
+        return updatedMessages;
+      });
+      
+    } catch (error) {
+      console.error('Error cancelling booking from AI:', error);
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        content: `Failed to cancel booking: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        isUser: false,
+        timestamp: new Date(),
+        type: 'text',
+      }]);
+    }
+  };
   const [selectedBus, setSelectedBus] = useState<null | (FirestoreBus & { timings?: any[] })>(null);
   const [selectedTiming, setSelectedTiming] = useState<any>(null);
   const [selectedSeat, setSelectedSeat] = useState<string | null>(null);
@@ -629,6 +807,145 @@ const AssistantPage: React.FC = () => {
         setIsTyping(false);
         return;
       }
+      // Check for cancellation query
+      if (isCancelBookingQuery(inputValue)) {
+        if (!user) {
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(),
+            content: "You must be signed in to cancel bookings. Please sign in first.",
+            isUser: false,
+            timestamp: new Date(),
+            type: 'text',
+          }]);
+          setIsTyping(false);
+          return;
+        }
+        
+        const cancelQuery = parseCancelBookingQuery(inputValue);
+        
+        if (cancelQuery) {
+          // Try to find the booking by ID or seat
+          const bookingsQuery = query(
+            collection(db, 'bookings'),
+            where('userId', '==', user.uid),
+            where('status', 'in', ['confirmed', 'upcoming'])
+          );
+          const bookingsSnap = await getDocs(bookingsQuery);
+          const userBookings = bookingsSnap.docs.map(doc => ({ id: doc.id, ...(doc.data() as Omit<FirestoreBooking, 'id'>) }));
+          
+          let bookingToCancel = null;
+          
+          if (cancelQuery.type === 'bookingId') {
+            bookingToCancel = userBookings.find(b => b.id === cancelQuery.value);
+          } else if (cancelQuery.type === 'seat') {
+            bookingToCancel = userBookings.find(b => b.seat === cancelQuery.value);
+          }
+          
+          if (bookingToCancel) {
+            const result = await cancelBooking(bookingToCancel.id, user.uid);
+            setMessages(prev => [...prev, {
+              id: (Date.now() + 1).toString(),
+              content: result.message,
+              isUser: false,
+              timestamp: new Date(),
+              type: 'text',
+            }]);
+          } else {
+            setMessages(prev => [...prev, {
+              id: (Date.now() + 1).toString(),
+              content: `No active booking found with ${cancelQuery.type === 'bookingId' ? 'ID' : 'seat'} "${cancelQuery.value}". Please check your bookings first.`,
+              isUser: false,
+              timestamp: new Date(),
+              type: 'text',
+            }]);
+          }
+        } else {
+          // Show user's active bookings for selection
+          const bookingsQuery = query(
+            collection(db, 'bookings'),
+            where('userId', '==', user.uid),
+            where('status', 'in', ['confirmed', 'upcoming'])
+          );
+          const bookingsSnap = await getDocs(bookingsQuery);
+          const userBookings = bookingsSnap.docs.map(doc => ({ id: doc.id, ...(doc.data() as Omit<FirestoreBooking, 'id'>) }));
+          
+          if (userBookings.length > 0) {
+            let reply = 'Your active bookings:\n';
+            userBookings.forEach((booking, index) => {
+              reply += `${index + 1}. Booking ID: ${booking.id}\n`;
+              reply += `   🚌 Bus: ${booking.busName || 'N/A'}\n`;
+              reply += `   📍 Route: ${booking.route || 'N/A'}\n`;
+              reply += `   💺 Seat: ${booking.seat || 'N/A'}\n`;
+              reply += `   📅 Date: ${booking.date ? (typeof booking.date === 'string' ? booking.date : (booking.date && typeof booking.date === 'object' && 'seconds' in booking.date ? new Date(booking.date.seconds * 1000).toLocaleString() : '-')) : '-'}\n\n`;
+            });
+            reply += 'To cancel a booking, say "cancel booking [ID]" or "cancel seat [seat number]".';
+            setMessages(prev => [...prev, {
+              id: (Date.now() + 1).toString(),
+              content: reply,
+              isUser: false,
+              timestamp: new Date(),
+              type: 'text',
+            }]);
+          } else {
+            setMessages(prev => [...prev, {
+              id: (Date.now() + 1).toString(),
+              content: "You don't have any active bookings to cancel.",
+              isUser: false,
+              timestamp: new Date(),
+              type: 'text',
+            }]);
+          }
+        }
+        setIsTyping(false);
+        return;
+      }
+      
+      // Check for "my bookings" query
+      if (isMyBookingsQuery(inputValue)) {
+        if (!user) {
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(),
+            content: "You must be signed in to view your bookings. Please sign in first.",
+            isUser: false,
+            timestamp: new Date(),
+            type: 'text',
+          }]);
+          setIsTyping(false);
+          return;
+        }
+        
+        // Fetch user's bookings
+        const bookingsQuery = query(
+          collection(db, 'bookings'),
+          where('userId', '==', user.uid),
+          where('status', 'in', ['confirmed', 'upcoming'])
+        );
+        const bookingsSnap = await getDocs(bookingsQuery);
+        const userBookings = bookingsSnap.docs.map(doc => ({ id: doc.id, ...(doc.data() as Omit<FirestoreBooking, 'id'>) }));
+        
+        console.log('Found user bookings:', userBookings.length, userBookings.map(b => ({ id: b.id, status: b.status })));
+        
+        if (userBookings.length > 0) {
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(),
+            isUser: false,
+            timestamp: new Date(),
+            type: 'booking-cards',
+            bookings: userBookings,
+          }]);
+        } else {
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(),
+            content: "You don't have any active bookings.",
+            isUser: false,
+            timestamp: new Date(),
+            type: 'text',
+          }]);
+        }
+        setIsTyping(false);
+        return;
+      }
+      
       // Check for booking query
       if (isBookingQuery(inputValue)) {
         // Fetch all bookings from Firestore
@@ -700,6 +1017,8 @@ const AssistantPage: React.FC = () => {
     "Find the next bus to Downtown",
     "What are the ticket prices?",
     "Show me bus schedules",
+    "My bookings",
+    "Cancel my booking",
     "Track buses near me"
   ];
 
@@ -797,6 +1116,53 @@ const AssistantPage: React.FC = () => {
                       </div>
                       );
                     })}
+                  </div>
+                </div>
+              ) : msg.type === 'booking-cards' && msg.bookings ? (
+                <div key={msg.id} className="mb-4">
+                  <div className="flex flex-col gap-4">
+                    {msg.bookings.map((booking: FirestoreBooking) => (
+                      <div key={booking.id} className="relative">
+                        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow border border-gray-200 dark:border-gray-700">
+                          <div className="p-6">
+                            <div className="flex justify-between items-start mb-4">
+                              <div>
+                                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Booking #{booking.id}</h3>
+                                <p className="text-sm text-gray-600 dark:text-gray-400">{booking.busName} • {booking.route}</p>
+                              </div>
+                              <span className="px-2 py-1 rounded-full text-xs font-medium text-green-600 bg-green-100 dark:bg-green-900/20">
+                                {booking.status}
+                              </span>
+                            </div>
+
+                            <div className="space-y-3">
+                              <div className="flex items-center space-x-2 text-sm">
+                                <MapPin className="h-4 w-4 text-gray-400" />
+                                <span className="text-gray-600 dark:text-gray-400">{booking.route}</span>
+                              </div>
+
+                              <div className="flex items-center space-x-2 text-sm">
+                                <Users className="h-4 w-4 text-gray-400" />
+                                <span className="text-gray-600 dark:text-gray-400">Seat: {booking.seat}</span>
+                              </div>
+
+                              <div className="flex items-center space-x-2 text-sm">
+                                <Clock className="h-4 w-4 text-gray-400" />
+                                <span className="text-gray-600 dark:text-gray-400">
+                                  Date: {booking.date ? (typeof booking.date === 'string' ? booking.date : (booking.date && typeof booking.date === 'object' && 'seconds' in booking.date ? new Date(booking.date.seconds * 1000).toLocaleString() : '-')) : '-'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          className="absolute top-4 right-4 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 shadow"
+                          onClick={() => handleCancelBookingFromAI(booking.id)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 </div>
               ) : (
