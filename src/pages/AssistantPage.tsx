@@ -86,6 +86,88 @@ function isRouteQuery(text: string) {
   // e.g. 'kollam to tenkasi', 'city center to airport'
   return /([\w\s]+) to ([\w\s]+)/i.test(text);
 }
+
+// Fuzzy matching function to find the best match for city names
+function findBestCityMatch(inputCity: string, availableCities: string[]): { corrected: string; confidence: number } {
+  const normalizedInput = inputCity.toLowerCase().trim();
+  
+  // Exact match
+  const exactMatch = availableCities.find(city => 
+    city.toLowerCase() === normalizedInput
+  );
+  if (exactMatch) {
+    return { corrected: exactMatch, confidence: 1.0 };
+  }
+  
+  // Partial match (contains)
+  const partialMatch = availableCities.find(city => 
+    city.toLowerCase().includes(normalizedInput) || 
+    normalizedInput.includes(city.toLowerCase())
+  );
+  if (partialMatch) {
+    return { corrected: partialMatch, confidence: 0.8 };
+  }
+  
+  // Fuzzy match using Levenshtein distance
+  let bestMatch = availableCities[0];
+  let bestScore = 0;
+  
+  for (const city of availableCities) {
+    const score = calculateSimilarity(normalizedInput, city.toLowerCase());
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = city;
+    }
+  }
+  
+  // Only return if confidence is reasonable
+  if (bestScore > 0.6) {
+    return { corrected: bestMatch, confidence: bestScore };
+  }
+  
+  return { corrected: inputCity, confidence: 0 };
+}
+
+// Calculate similarity between two strings (0-1)
+function calculateSimilarity(str1: string, str2: string): number {
+  const longer = str1.length > str2.length ? str1 : str2;
+  const shorter = str1.length > str2.length ? str2 : str1;
+  
+  if (longer.length === 0) return 1.0;
+  
+  const distance = levenshteinDistance(longer, shorter);
+  return (longer.length - distance) / longer.length;
+}
+
+// Levenshtein distance calculation
+function levenshteinDistance(str1: string, str2: string): number {
+  const matrix = [];
+  
+  for (let i = 0; i <= str2.length; i++) {
+    matrix[i] = [i];
+  }
+  
+  for (let j = 0; j <= str1.length; j++) {
+    matrix[0][j] = j;
+  }
+  
+  for (let i = 1; i <= str2.length; i++) {
+    for (let j = 1; j <= str1.length; j++) {
+      if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  
+  return matrix[str2.length][str1.length];
+}
+
 function parseRouteQuery(text: string) {
   const match = text.match(/([\w\s]+) to ([\w\s]+)/i);
   if (match) {
@@ -120,16 +202,47 @@ async function fetchBusesFromFirestore(busQuery?: { from: string; to: string }) 
   const buses: FirestoreBus[] = snap.docs.map(doc => ({ id: doc.id, ...(doc.data() as Omit<FirestoreBus, 'id'>) }));
   let found = buses;
   let reply = '';
+  let correctedFrom = busQuery?.from || '';
+  let correctedTo = busQuery?.to || '';
+  let autoCorrectMessage = '';
+  
   if (busQuery) {
+    // Get all unique cities from buses
+    const allCities = [...new Set([
+      ...buses.map(b => b.start).filter(Boolean),
+      ...buses.map(b => b.end).filter(Boolean)
+    ])];
+    
+    // Auto-correct from city
+    const fromMatch = findBestCityMatch(busQuery.from, allCities);
+    if (fromMatch.confidence > 0.6 && fromMatch.corrected !== busQuery.from) {
+      correctedFrom = fromMatch.corrected;
+      autoCorrectMessage += `"${busQuery.from}" → "${correctedFrom}" `;
+    }
+    
+    // Auto-correct to city
+    const toMatch = findBestCityMatch(busQuery.to, allCities);
+    if (toMatch.confidence > 0.6 && toMatch.corrected !== busQuery.to) {
+      correctedTo = toMatch.corrected;
+      autoCorrectMessage += `"${busQuery.to}" → "${correctedTo}" `;
+    }
+    
     found = buses.filter(b =>
       b.start && b.end &&
-      b.start.toLowerCase().includes(busQuery.from.toLowerCase()) &&
-      b.end.toLowerCase().includes(busQuery.to.toLowerCase())
+      b.start.toLowerCase().includes(correctedFrom.toLowerCase()) &&
+      b.end.toLowerCase().includes(correctedTo.toLowerCase())
     );
+    
     if (found.length > 0) {
-      reply = `Buses from ${busQuery.from} to ${busQuery.to} (Real-time data):\n`;
+      reply = `Buses from ${correctedFrom} to ${correctedTo} (Real-time data):\n`;
+      if (autoCorrectMessage) {
+        reply = `🔍 Auto-corrected: ${autoCorrectMessage}\n\n` + reply;
+      }
     } else {
-      reply = 'No buses found in your database.';
+      reply = `No buses found from "${correctedFrom}" to "${correctedTo}".`;
+      if (autoCorrectMessage) {
+        reply = `🔍 Auto-corrected: ${autoCorrectMessage}\n\n` + reply;
+      }
     }
   } else if (found.length > 0) {
     reply = 'All buses (Real-time data):\n';
@@ -419,11 +532,35 @@ const AssistantPage: React.FC = () => {
         const snap = await getDocs(collection(db, 'buses'));
         const buses: (FirestoreBus & { timings?: any[] })[] = snap.docs.map(doc => ({ id: doc.id, ...(doc.data() as Omit<FirestoreBus, 'id'>) }));
         let found = buses;
+        let autoCorrectMessage = '';
+        
         if (busQuery) {
+          // Get all unique cities from buses
+          const allCities = [...new Set([
+            ...buses.map(b => b.start).filter(Boolean),
+            ...buses.map(b => b.end).filter(Boolean)
+          ])];
+          
+          // Auto-correct from city
+          const fromMatch = findBestCityMatch(busQuery.from, allCities);
+          const correctedFrom = fromMatch.confidence > 0.6 ? fromMatch.corrected : busQuery.from;
+          
+          // Auto-correct to city
+          const toMatch = findBestCityMatch(busQuery.to, allCities);
+          const correctedTo = toMatch.confidence > 0.6 ? toMatch.corrected : busQuery.to;
+          
+          // Build auto-correct message
+          if (fromMatch.confidence > 0.6 && fromMatch.corrected !== busQuery.from) {
+            autoCorrectMessage += `"${busQuery.from}" → "${correctedFrom}" `;
+          }
+          if (toMatch.confidence > 0.6 && toMatch.corrected !== busQuery.to) {
+            autoCorrectMessage += `"${busQuery.to}" → "${correctedTo}" `;
+          }
+          
           found = buses.filter(b =>
             b.start && b.end &&
-            b.start.toLowerCase().includes(busQuery.from.toLowerCase()) &&
-            b.end.toLowerCase().includes(busQuery.to.toLowerCase())
+            b.start.toLowerCase().includes(correctedFrom.toLowerCase()) &&
+            b.end.toLowerCase().includes(correctedTo.toLowerCase())
           );
         }
         // For each bus, fetch timings and real-time booking data
@@ -457,17 +594,33 @@ const AssistantPage: React.FC = () => {
           return { ...b, timings: timingsWithBookings };
         }));
         if (busesWithTimings.length > 0) {
+          // Add auto-correct message if there was correction
+          if (autoCorrectMessage) {
+            setMessages(prev => [...prev, {
+              id: (Date.now() + 1).toString(),
+              content: `🔍 Auto-corrected: ${autoCorrectMessage}`,
+              isUser: false,
+              timestamp: new Date(),
+              type: 'text',
+            }]);
+          }
+          
           setMessages(prev => [...prev, {
-            id: (Date.now() + 1).toString(),
+            id: (Date.now() + 2).toString(),
             isUser: false,
             timestamp: new Date(),
             type: 'bus-cards',
             buses: busesWithTimings,
           }]);
         } else {
+          let noBusesMessage = 'No buses found in your database for this route.';
+          if (autoCorrectMessage) {
+            noBusesMessage = `🔍 Auto-corrected: ${autoCorrectMessage}\n\n${noBusesMessage}`;
+          }
+          
           setMessages(prev => [...prev, {
             id: (Date.now() + 1).toString(),
-            content: 'No buses found in your database for this route.',
+            content: noBusesMessage,
             isUser: false,
             timestamp: new Date(),
             type: 'text',
