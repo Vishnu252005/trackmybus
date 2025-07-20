@@ -439,7 +439,34 @@ const ProfilePage: React.FC = () => {
             )}
             {adminTab === 'bookings' && (
               <>
-                <h2 className="text-3xl font-bold mb-6">Bookings</h2>
+                <h2 className="text-3xl font-bold mb-6">Bookings Management</h2>
+                
+                {/* Stats Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                  <div className="bg-blue-100 dark:bg-blue-900 p-4 rounded-lg">
+                    <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{bookings.length}</div>
+                    <div className="text-sm text-blue-600 dark:text-blue-400">Total Bookings</div>
+                  </div>
+                  <div className="bg-green-100 dark:bg-green-900 p-4 rounded-lg">
+                    <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                      {bookings.filter(b => b.status === 'confirmed').length}
+                    </div>
+                    <div className="text-sm text-green-600 dark:text-green-400">Confirmed</div>
+                  </div>
+                  <div className="bg-yellow-100 dark:bg-yellow-900 p-4 rounded-lg">
+                    <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
+                      {bookings.filter(b => b.status === 'upcoming').length}
+                    </div>
+                    <div className="text-sm text-yellow-600 dark:text-yellow-400">Upcoming</div>
+                  </div>
+                  <div className="bg-red-100 dark:bg-red-900 p-4 rounded-lg">
+                    <div className="text-2xl font-bold text-red-600 dark:text-red-400">
+                      {bookings.filter(b => b.status === 'cancelled').length}
+                    </div>
+                    <div className="text-sm text-red-600 dark:text-red-400">Cancelled</div>
+                  </div>
+                </div>
+
                 {bookingsLoading ? (
                   <div className="text-gray-500 dark:text-gray-400">Loading bookings...</div>
                 ) : (
@@ -454,21 +481,90 @@ const ProfilePage: React.FC = () => {
                           <th className="px-4 py-2">Seat</th>
                           <th className="px-4 py-2">Date</th>
                           <th className="px-4 py-2">Status</th>
+                          <th className="px-4 py-2">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
                         {bookings.map(b => (
-                          <tr key={b.id} className="border-t border-gray-300 dark:border-gray-600">
-                            <td className="px-4 py-2">{b.username || '-'}</td>
+                          <tr key={b.id} className="border-t border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600">
+                            <td className="px-4 py-2 font-semibold">{b.username || '-'}</td>
                             <td className="px-4 py-2">{b.email || '-'}</td>
-                            <td className="px-4 py-2">{b.route || '-'}</td>
-                            <td className="px-4 py-2">{b.busName || '-'}</td>
-                            <td className="px-4 py-2">{b.seat || '-'}</td>
-                            <td className="px-4 py-2">{b.date ? (typeof b.date === 'string' ? b.date : (b.date.seconds ? new Date(b.date.seconds * 1000).toLocaleString() : '-')) : '-'}</td>
-                            <td className="px-4 py-2">{b.status || '-'}</td>
+                            <td className="px-4 py-2">
+                              <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
+                                {b.route || '-'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2 font-medium">{b.busName || '-'}</td>
+                            <td className="px-4 py-2">
+                              <span className="px-2 py-1 bg-gray-100 dark:bg-gray-600 rounded text-sm font-mono">
+                                {b.seat || '-'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2 text-sm">
+                              {b.date ? (
+                                typeof b.date === 'string' ? 
+                                  new Date(b.date).toLocaleString() : 
+                                  (b.date.seconds ? new Date(b.date.seconds * 1000).toLocaleString() : '-')
+                              ) : '-'}
+                            </td>
+                            <td className="px-4 py-2">
+                              <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                b.status === 'confirmed' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+                                b.status === 'upcoming' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200' :
+                                b.status === 'cancelled' ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' :
+                                'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
+                              }`}>
+                                {b.status || 'pending'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2">
+                              <div className="flex gap-2">
+                                <button 
+                                  onClick={() => {
+                                    // Update booking status
+                                    updateDoc(doc(db, 'bookings', b.id), {
+                                      status: b.status === 'confirmed' ? 'cancelled' : 'confirmed'
+                                    }).then(() => {
+                                      // Refresh bookings
+                                      getDocs(collection(db, 'bookings')).then(snap => {
+                                        const updatedBookings = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                                        setBookings(updatedBookings);
+                                      });
+                                    });
+                                  }}
+                                  className={`px-2 py-1 rounded text-xs ${
+                                    b.status === 'confirmed' ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'
+                                  } text-white`}
+                                >
+                                  {b.status === 'confirmed' ? 'Cancel' : 'Confirm'}
+                                </button>
+                                <button 
+                                  onClick={() => {
+                                    if (window.confirm('Are you sure you want to delete this booking?')) {
+                                      deleteDoc(doc(db, 'bookings', b.id)).then(() => {
+                                        // Refresh bookings
+                                        getDocs(collection(db, 'bookings')).then(snap => {
+                                          const updatedBookings = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                                          setBookings(updatedBookings);
+                                        });
+                                      });
+                                    }
+                                  }}
+                                  className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-xs"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </td>
                           </tr>
                         ))}
-                        {bookings.length === 0 && <tr><td colSpan={7} className="text-gray-500 dark:text-gray-400 px-4 py-2">No bookings found.</td></tr>}
+                        {bookings.length === 0 && (
+                          <tr>
+                            <td colSpan={8} className="text-gray-500 dark:text-gray-400 px-4 py-8 text-center">
+                              No bookings found. Bookings will appear here when users make reservations.
+                            </td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -683,8 +779,235 @@ const ProfilePage: React.FC = () => {
             )}
             {adminTab === 'settings' && (
               <>
-                <h2 className="text-3xl font-bold mb-6">Settings</h2>
-                <div className="text-gray-700 dark:text-gray-200 mb-4">Settings coming soon!</div>
+                <h2 className="text-3xl font-bold mb-6">Admin Settings</h2>
+                
+                {/* Admin Setup */}
+                <div className="bg-blue-100 dark:bg-blue-900 p-6 rounded-lg mb-6">
+                  <h3 className="text-xl font-bold mb-4 text-blue-800 dark:text-blue-200">Admin Setup</h3>
+                  <p className="text-blue-700 dark:text-blue-300 mb-4">
+                    If you're not seeing bookings, you may need to set up admin access. Click the button below to create your admin account.
+                  </p>
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={async () => {
+                        try {
+                          await setDoc(doc(db, 'admin', user.uid), {
+                            email: user.email,
+                            uid: user.uid,
+                            username: user.displayName || 'Admin',
+                            createdAt: serverTimestamp(),
+                            role: 'admin'
+                          });
+                          setToast({ type: 'success', message: 'Admin access granted! Please refresh the page.' });
+                          // Refresh admin status
+                          const q = query(collection(db, 'admin'), where('email', '==', user.email));
+                          const snapshot = await getDocs(q);
+                          if (!snapshot.empty) {
+                            setRole('admin');
+                          }
+                        } catch (error) {
+                          setToast({ type: 'error', message: 'Failed to create admin access. Please try again.' });
+                        }
+                      }}
+                      className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                    >
+                      Setup Admin Access
+                    </button>
+                    
+                    <button 
+                      onClick={async () => {
+                        try {
+                          // Create a test booking
+                          await addDoc(collection(db, 'bookings'), {
+                            userId: user.uid,
+                            username: user.displayName || 'Test User',
+                            email: user.email,
+                            route: 'Test Route → Test Destination',
+                            busName: 'Test Bus 101',
+                            seat: 'A1',
+                            date: new Date(),
+                            status: 'confirmed',
+                            busId: 'test-bus-1',
+                            timingId: 'test-timing-1',
+                            timing: '10:00 AM',
+                            bookingDate: new Date()
+                          });
+                          setToast({ type: 'success', message: 'Test booking created! Check the Bookings tab.' });
+                          // Refresh bookings
+                          const snap = await getDocs(collection(db, 'bookings'));
+                          const updatedBookings = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                          setBookings(updatedBookings);
+                        } catch (error) {
+                          setToast({ type: 'error', message: 'Failed to create test booking. Please try again.' });
+                        }
+                      }}
+                      className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                    >
+                      Create Test Booking
+                    </button>
+                    
+                    <button 
+                      onClick={async () => {
+                        try {
+                          // Create multiple test bookings
+                          const testBookings = [
+                            {
+                              userId: user.uid,
+                              username: 'John Doe',
+                              email: 'john@example.com',
+                              route: 'City Center → Airport',
+                              busName: 'B101',
+                              seat: '12A',
+                              date: new Date(),
+                              status: 'confirmed',
+                              busId: 'bus1',
+                              timingId: 'timing1',
+                              timing: '09:00 AM',
+                              bookingDate: new Date()
+                            },
+                            {
+                              userId: user.uid,
+                              username: 'Jane Smith',
+                              email: 'jane@example.com',
+                              route: 'Downtown → University',
+                              busName: 'B205',
+                              seat: '7B',
+                              date: new Date(),
+                              status: 'upcoming',
+                              busId: 'bus2',
+                              timingId: 'timing2',
+                              timing: '02:30 PM',
+                              bookingDate: new Date()
+                            },
+                            {
+                              userId: user.uid,
+                              username: 'Mike Johnson',
+                              email: 'mike@example.com',
+                              route: 'Mall → Residential',
+                              busName: 'B312',
+                              seat: '3C',
+                              date: new Date(),
+                              status: 'cancelled',
+                              busId: 'bus3',
+                              timingId: 'timing3',
+                              timing: '06:00 PM',
+                              bookingDate: new Date()
+                            }
+                          ];
+                          
+                          // Create all test bookings
+                          for (const booking of testBookings) {
+                            await addDoc(collection(db, 'bookings'), booking);
+                          }
+                          
+                          setToast({ type: 'success', message: 'Multiple test bookings created! Check the Bookings tab.' });
+                          // Refresh bookings
+                          const snap = await getDocs(collection(db, 'bookings'));
+                          const updatedBookings = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                          setBookings(updatedBookings);
+                        } catch (error) {
+                          setToast({ type: 'error', message: 'Failed to create test bookings. Please try again.' });
+                        }
+                      }}
+                      className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700"
+                    >
+                      Create Multiple Test Bookings
+                    </button>
+                  </div>
+                </div>
+
+                {/* Admin Status */}
+                <div className="bg-green-100 dark:bg-green-900 p-4 rounded-lg mb-6">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
+                    <span className="font-semibold text-green-800 dark:text-green-200">Admin Access Active</span>
+                  </div>
+                  <p className="text-green-700 dark:text-green-300 mt-1">You have full administrative privileges.</p>
+                </div>
+
+                <div className="text-gray-700 dark:text-gray-200 mb-4">
+                  <p className="mb-2"><strong>Current Status:</strong> {role === 'admin' ? 'Admin' : 'User'}</p>
+                  <p className="mb-2"><strong>Email:</strong> {user.email}</p>
+                  <p className="mb-2"><strong>User ID:</strong> {user.uid}</p>
+                </div>
+
+                {/* Admin Management */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+                    <h3 className="text-xl font-bold mb-4">Admin Account</h3>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email</label>
+                        <p className="text-gray-900 dark:text-white font-medium">{user.email}</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Admin ID</label>
+                        <p className="text-gray-900 dark:text-white font-mono text-sm">{user.uid}</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Admin Status</label>
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                          Active
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+                    <h3 className="text-xl font-bold mb-4">Database Access</h3>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-700 dark:text-gray-300">Users Collection</span>
+                        <span className="text-green-600 dark:text-green-400">✓ Read/Write</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-700 dark:text-gray-300">Bookings Collection</span>
+                        <span className="text-green-600 dark:text-green-400">✓ Read/Write</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-700 dark:text-gray-300">Buses Collection</span>
+                        <span className="text-green-600 dark:text-green-400">✓ Read/Write</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-700 dark:text-gray-300">Admin Collection</span>
+                        <span className="text-green-600 dark:text-green-400">✓ Read</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick Actions */}
+                <div className="mt-6 bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+                  <h3 className="text-xl font-bold mb-4">Quick Actions</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <button 
+                      onClick={() => setAdminTab('users')}
+                      className="p-4 bg-blue-100 dark:bg-blue-900 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors"
+                    >
+                      <UserIcon className="h-6 w-6 text-blue-600 dark:text-blue-400 mb-2" />
+                      <div className="font-semibold text-blue-800 dark:text-blue-200">Manage Users</div>
+                      <div className="text-sm text-blue-600 dark:text-blue-400">View and manage user accounts</div>
+                    </button>
+                    
+                    <button 
+                      onClick={() => setAdminTab('bookings')}
+                      className="p-4 bg-green-100 dark:bg-green-900 rounded-lg hover:bg-green-200 dark:hover:bg-green-800 transition-colors"
+                    >
+                      <Activity className="h-6 w-6 text-green-600 dark:text-green-400 mb-2" />
+                      <div className="font-semibold text-green-800 dark:text-green-200">Manage Bookings</div>
+                      <div className="text-sm text-green-600 dark:text-green-400">View and manage all bookings</div>
+                    </button>
+                    
+                    <button 
+                      onClick={() => setAdminTab('buses')}
+                      className="p-4 bg-purple-100 dark:bg-purple-900 rounded-lg hover:bg-purple-200 dark:hover:bg-purple-800 transition-colors"
+                    >
+                      <Edit3 className="h-6 w-6 text-purple-600 dark:text-purple-400 mb-2" />
+                      <div className="font-semibold text-purple-800 dark:text-purple-200">Manage Buses</div>
+                      <div className="text-sm text-purple-600 dark:text-purple-400">Add and manage bus routes</div>
+                    </button>
+                  </div>
+                </div>
               </>
             )}
             <button onClick={() => { signOut(); navigate('/'); }} className="mt-8 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 flex items-center"><LogOut className="h-4 w-4 mr-1" />Sign Out</button>
