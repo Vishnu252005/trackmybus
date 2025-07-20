@@ -1,10 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import { RefreshCw, Filter, Search } from 'lucide-react';
-import { mockBuses } from '../data/mockData';
+import { collection, getDocs, onSnapshot, query, where } from 'firebase/firestore';
+import { db } from '../firebase/config';
 import { Bus } from '../types';
 import BusCard from '../components/BusCard';
 import MapSimulation from '../components/MapSimulation';
 import LoadingSpinner from '../components/LoadingSpinner';
+
+// Firestore bus type
+type FirestoreBus = {
+  id: string;
+  name: string;
+  start: string;
+  end: string;
+  capacity: number;
+  accessible?: boolean;
+  currentLocation?: {
+    lat: number;
+    lng: number;
+    address: string;
+  };
+  status?: 'on-time' | 'delayed' | 'early';
+  occupancy?: number;
+  eta?: number;
+  distance?: number;
+};
 
 const TrackingPage: React.FC = () => {
   const [buses, setBuses] = useState<Bus[]>([]);
@@ -14,15 +34,103 @@ const TrackingPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedBus, setSelectedBus] = useState<Bus | null>(null);
 
-  useEffect(() => {
-    // Simulate loading
-    const timer = setTimeout(() => {
+  // Convert Firestore bus to Bus type
+  const convertFirestoreBusToBus = (firestoreBus: FirestoreBus): Bus => {
+    return {
+      id: firestoreBus.id,
+      number: firestoreBus.name,
+      route: `${firestoreBus.start} → ${firestoreBus.end}`,
+      currentLocation: firestoreBus.currentLocation || {
+        lat: 10.8505, // Default Kerala coordinates
+        lng: 76.2711,
+        address: 'Kerala, India'
+      },
+      destination: firestoreBus.end,
+      eta: firestoreBus.eta || Math.floor(Math.random() * 30) + 5, // Random ETA if not available
+      distance: firestoreBus.distance || Math.floor(Math.random() * 50) + 10, // Random distance if not available
+      capacity: firestoreBus.capacity || 50,
+      occupancy: firestoreBus.occupancy || Math.floor(Math.random() * firestoreBus.capacity) + 1,
+      status: firestoreBus.status || 'on-time'
+    };
+  };
+
+  // Fetch buses from Firestore
+  const fetchBusesFromFirestore = async () => {
+    try {
+      setLoading(true);
+      const busesQuery = query(collection(db, 'buses'));
+      const snapshot = await getDocs(busesQuery);
+      
+      const firestoreBuses: FirestoreBus[] = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...(doc.data() as Omit<FirestoreBus, 'id'>)
+      }));
+
+      const convertedBuses = firestoreBuses.map(convertFirestoreBusToBus);
+      setBuses(convertedBuses);
+      setFilteredBuses(convertedBuses);
+      console.log('Fetched buses from Firestore:', convertedBuses.length);
+    } catch (error) {
+      console.error('Error fetching buses:', error);
+      // Fallback to mock data if Firestore fails
+      const mockBuses = [
+        {
+          id: '1',
+          number: '101',
+          route: 'Kollam → Thiruvananthapuram',
+          currentLocation: { lat: 8.8932, lng: 76.6141, address: 'Kollam Junction' },
+          destination: 'Thiruvananthapuram',
+          eta: 15,
+          distance: 25,
+          capacity: 50,
+          occupancy: 35,
+          status: 'on-time' as const
+        },
+        {
+          id: '2',
+          number: '102',
+          route: 'Kochi → Kozhikode',
+          currentLocation: { lat: 9.9312, lng: 76.2673, address: 'Kochi Central' },
+          destination: 'Kozhikode',
+          eta: 8,
+          distance: 12,
+          capacity: 45,
+          occupancy: 42,
+          status: 'delayed' as const
+        }
+      ];
       setBuses(mockBuses);
       setFilteredBuses(mockBuses);
+    } finally {
       setLoading(false);
-    }, 1000);
+    }
+  };
 
-    return () => clearTimeout(timer);
+  // Set up real-time listener
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, 'buses'),
+      (snapshot) => {
+        const firestoreBuses: FirestoreBus[] = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...(doc.data() as Omit<FirestoreBus, 'id'>)
+        }));
+
+        const convertedBuses = firestoreBuses.map(convertFirestoreBusToBus);
+        setBuses(convertedBuses);
+        console.log('Real-time bus update:', convertedBuses.length, 'buses');
+      },
+      (error) => {
+        console.error('Real-time listener error:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // Initial fetch
+  useEffect(() => {
+    fetchBusesFromFirestore();
   }, []);
 
   useEffect(() => {
@@ -40,12 +148,7 @@ const TrackingPage: React.FC = () => {
   }, [buses, searchTerm, statusFilter]);
 
   const refreshData = () => {
-    setLoading(true);
-    // Simulate API call
-    setTimeout(() => {
-      setBuses([...mockBuses]);
-      setLoading(false);
-    }, 1000);
+    fetchBusesFromFirestore();
   };
 
   if (loading) {
@@ -88,6 +191,7 @@ const TrackingPage: React.FC = () => {
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
+                  aria-label="Filter by bus status"
                   className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 >
                   <option value="all">All Status</option>

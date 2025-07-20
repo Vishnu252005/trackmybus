@@ -9,6 +9,7 @@ import AssistantPage from './pages/AssistantPage';
 import ProfilePage from './pages/ProfilePage';
 import { onAuthStateChanged, signOut as firebaseSignOut, User as FirebaseUser } from 'firebase/auth';
 import { auth } from './firebase';
+import { useTheme } from './hooks/useTheme';
 
 export const AuthContext = createContext<{
   user: FirebaseUser | null;
@@ -22,6 +23,7 @@ export const AuthContext = createContext<{
 
 function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
+  const { isDark } = useTheme();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
@@ -39,7 +41,7 @@ function App() {
   return (
     <AuthContext.Provider value={{ user, signIn, signOut }}>
       <Router>
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+        <div className={`min-h-screen bg-gray-50 dark:bg-gray-900 ${isDark ? 'dark' : ''}`}>
           <Navbar />
           <Routes>
             <Route path="/" element={<HomePage />} />

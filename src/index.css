@@ -1,3 +1,49 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Fix for white screen when dragging/pulling */
+html, body {
+  height: 100%;
+  overflow-x: hidden;
+  background-color: #f9fafb; /* light gray-50 */
+}
+
+html.dark, body.dark {
+  background-color: #111827; /* dark gray-900 */
+}
+
+/* Ensure the root element covers the full viewport */
+#root {
+  min-height: 100vh;
+  background-color: #f9fafb; /* light gray-50 */
+}
+
+#root.dark {
+  background-color: #111827; /* dark gray-900 */
+}
+
+/* Prevent white flash on overscroll */
+* {
+  overscroll-behavior: contain;
+}
+
+/* Ensure smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Fix for iOS Safari overscroll */
+body {
+  -webkit-overflow-scrolling: touch;
+  position: relative;
+}
+
+/* Ensure all pages have proper background */
+.min-h-screen {
+  background-color: #f9fafb; /* light gray-50 */
+}
+
+.dark .min-h-screen {
+  background-color: #111827; /* dark gray-900 */
+}

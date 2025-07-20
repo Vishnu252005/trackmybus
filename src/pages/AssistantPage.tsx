@@ -788,8 +788,8 @@ const AssistantPage: React.FC = () => {
         if (busesWithTimings.length > 0) {
           // Add auto-correct message if there was correction
           if (autoCorrectMessage) {
-            setMessages(prev => [...prev, {
-              id: (Date.now() + 1).toString(),
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(),
               content: `🔍 Auto-corrected: ${autoCorrectMessage}`,
               isUser: false,
               timestamp: new Date(),
@@ -996,7 +996,7 @@ const AssistantPage: React.FC = () => {
         })),
         { role: 'user', content: translatedInput }
       ];
-      const aiContent = await fetchGroqChat(groqMessages);  
+      const aiContent = await fetchGroqChat(groqMessages);
       console.log(aiContent)
     
       // Translate AI output back to English if needed

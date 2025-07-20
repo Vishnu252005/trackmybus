@@ -1,29 +1,146 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MapPin, Clock, DollarSign, Navigation, Route } from 'lucide-react';
-import { mockRoutes } from '../data/mockData';
+import { collection, getDocs, onSnapshot, query, where } from 'firebase/firestore';
+import { db } from '../firebase/config';
+import { Route as RouteType } from '../types';
 import MapSimulation from '../components/MapSimulation';
 import LoadingSpinner from '../components/LoadingSpinner';
+
+// Firestore route type
+type FirestoreRoute = {
+  id: string;
+  name: string;
+  from: string;
+  to: string;
+  distance: number;
+  duration: number;
+  price: number;
+  buses: string[];
+};
 
 const RoutePage: React.FC = () => {
   const [fromLocation, setFromLocation] = useState('');
   const [toLocation, setToLocation] = useState('');
-  const [routes, setRoutes] = useState(mockRoutes);
-  const [selectedRoute, setSelectedRoute] = useState(null);
+  const [routes, setRoutes] = useState<RouteType[]>([]);
+  const [allRoutes, setAllRoutes] = useState<RouteType[]>([]);
+  const [selectedRoute, setSelectedRoute] = useState<RouteType | null>(null);
   const [searching, setSearching] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Convert Firestore route to Route type
+  const convertFirestoreRouteToRoute = (firestoreRoute: FirestoreRoute): RouteType => {
+    return {
+      id: firestoreRoute.id,
+      name: firestoreRoute.name,
+      from: firestoreRoute.from,
+      to: firestoreRoute.to,
+      distance: firestoreRoute.distance,
+      duration: firestoreRoute.duration,
+      price: firestoreRoute.price,
+      buses: firestoreRoute.buses
+    };
+  };
+
+  // Fetch routes from Firestore
+  const fetchRoutesFromFirestore = async () => {
+    try {
+      setLoading(true);
+      const routesQuery = query(collection(db, 'routes'));
+      const snapshot = await getDocs(routesQuery);
+      
+      const firestoreRoutes: FirestoreRoute[] = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...(doc.data() as Omit<FirestoreRoute, 'id'>)
+      }));
+
+      const convertedRoutes = firestoreRoutes.map(convertFirestoreRouteToRoute);
+      setAllRoutes(convertedRoutes);
+      setRoutes(convertedRoutes);
+      console.log('Fetched routes from Firestore:', convertedRoutes.length);
+    } catch (error) {
+      console.error('Error fetching routes:', error);
+      // Fallback to mock data if Firestore fails
+      const mockRoutes = [
+        {
+          id: '1',
+          name: 'Kollam → Thiruvananthapuram',
+          from: 'Kollam',
+          to: 'Thiruvananthapuram',
+          distance: 65,
+          duration: 90,
+          price: 120,
+          buses: ['101', '102', '103']
+        },
+        {
+          id: '2',
+          name: 'Kochi → Kozhikode',
+          from: 'Kochi',
+          to: 'Kozhikode',
+          distance: 120,
+          duration: 150,
+          price: 180,
+          buses: ['201', '202']
+        },
+        {
+          id: '3',
+          name: 'Thrissur → Palakkad',
+          from: 'Thrissur',
+          to: 'Palakkad',
+          distance: 45,
+          duration: 60,
+          price: 80,
+          buses: ['301', '302', '303']
+        }
+      ];
+      setAllRoutes(mockRoutes);
+      setRoutes(mockRoutes);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Set up real-time listener
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, 'routes'),
+      (snapshot) => {
+        const firestoreRoutes: FirestoreRoute[] = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...(doc.data() as Omit<FirestoreRoute, 'id'>)
+        }));
+
+        const convertedRoutes = firestoreRoutes.map(convertFirestoreRouteToRoute);
+        setAllRoutes(convertedRoutes);
+        console.log('Real-time route update:', convertedRoutes.length, 'routes');
+      },
+      (error) => {
+        console.error('Real-time listener error:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // Initial fetch
+  useEffect(() => {
+    fetchRoutesFromFirestore();
+  }, []);
 
   const handleSearch = () => {
     if (!fromLocation || !toLocation) return;
 
     setSearching(true);
-    // Simulate API call
+    // Filter routes based on search criteria
     setTimeout(() => {
-      const filteredRoutes = mockRoutes.filter(route =>
+      const filteredRoutes = allRoutes.filter(route =>
         route.from.toLowerCase().includes(fromLocation.toLowerCase()) ||
-        route.to.toLowerCase().includes(toLocation.toLowerCase())
+        route.to.toLowerCase().includes(toLocation.toLowerCase()) ||
+        route.name.toLowerCase().includes(fromLocation.toLowerCase()) ||
+        route.name.toLowerCase().includes(toLocation.toLowerCase())
       );
       setRoutes(filteredRoutes);
       setSearching(false);
-    }, 1500);
+    }, 1000);
   };
 
   const swapLocations = () => {
@@ -31,6 +148,14 @@ const RoutePage: React.FC = () => {
     setFromLocation(toLocation);
     setToLocation(temp);
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+        <LoadingSpinner size="lg" text="Loading routes..." />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -66,6 +191,7 @@ const RoutePage: React.FC = () => {
             <div className="flex justify-center">
               <button
                 onClick={swapLocations}
+                aria-label="Swap locations"
                 className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
               >
                 <Route className="h-5 w-5 text-gray-500 dark:text-gray-400 transform rotate-90" />
@@ -102,7 +228,7 @@ const RoutePage: React.FC = () => {
           {/* Routes List */}
           <div className="lg:col-span-1">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
-              Available Routes
+              Available Routes ({routes.length})
             </h2>
             
             {searching ? (
@@ -127,7 +253,7 @@ const RoutePage: React.FC = () => {
                           {route.name}
                         </h3>
                         <span className="bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 px-2 py-1 rounded-full text-sm font-medium">
-                          ${route.price}
+                          ₹{route.price}
                         </span>
                       </div>
 
@@ -215,7 +341,7 @@ const RoutePage: React.FC = () => {
                     <div>
                       <p className="text-sm text-gray-500 dark:text-gray-400">Price</p>
                       <p className="text-lg font-semibold text-gray-900 dark:text-white">
-                        ${selectedRoute.price}
+                        ₹{selectedRoute.price}
                       </p>
                     </div>
                   </div>
